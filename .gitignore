@@ -1,0 +1,9 @@
+# Machine-specific dev workspace (see go.work comment).
+go.work
+go.work.sum
+
+# Build output.
+/alpacahurd
+
+# Local runtime config (the repo ships config/hurd.example.json instead).
+/hurd.json

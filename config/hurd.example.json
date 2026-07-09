@@ -1,0 +1,28 @@
+{
+  "discovery": "direct",
+  "listen": ["en0"],
+  "indi":  { "enable": true, "port": 7624 },
+  "lx200": { "enable": true, "basePort": 4030 },
+
+  "devices": [
+    { "driver": "tenmicron", "port": 11110, "name": "10Micron", "addr": "10.0.1.51:3492",
+      "aperture": 200, "focalLength": 1600,
+      "guiderAperture": 60, "guiderFocalLength": 240,
+      "indi": true, "guideRate": 0.5 },
+
+    { "driver": "asicam", "port": 11111, "serial": "1a2b3c4d", "name": "Main camera", "fixdefects": true },
+    { "driver": "asicam", "port": 11112, "serial": "5e6f7a8b", "name": "Guide camera", "fixdefects": true, "indi": true },
+
+    { "driver": "oasisfoc", "port": 11120, "index": 0 },
+
+    { "driver": "focuscube", "port": 11121, "index": 0, "maxstep": 100000, "enable": false  },
+
+    { "driver": "focuslynx", "port": 11122, "index": 0, "channel": 1, "enable": false },
+
+    { "driver": "oasisfw", "port": 11123, "index": 0 },
+
+    { "driver": "unihedron", "port": 11124, "name": "Sky quality" },
+
+    { "driver": "mgpbox", "port": 11125, "name": "Weather", "mountAddr": "127.0.0.1:11110" }
+  ]
+}

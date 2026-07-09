@@ -1,0 +1,37 @@
+# 99-alpacahurd.rules — device permissions for alpacahurd on Linux.
+#
+# The pure-Go camera driver (asicam/astrocam) talks to the camera over usbfs
+# (/dev/bus/usb/*), which needs read-write access to the device node; the ASCOM
+# serial bind also opens each candidate to read its factory serial (the cameras
+# expose no USB serial-number descriptor — it lives in flash behind a vendor
+# control transfer). HID drivers (ZWO EAF/EFW, Oasis) need hidraw access; serial
+# drivers (Pegasus/Optec focusers, MGPBox, Unihedron, serial mounts) use /dev/ttyUSB*.
+#
+# Install: sudo cp deploy/99-alpacahurd.rules /etc/udev/rules.d/
+#          sudo udevadm control --reload && sudo udevadm trigger
+# (deploy/install.sh does this for you.)
+#
+# TAG+="uaccess" grants the device to the logged-in seat; MODE/GROUP cover a
+# headless service user (add it to the "plugdev" group — see alpacahurd.service).
+# Replug the camera after installing so the new rule applies.
+
+# ZWO (ASI cameras) — VID 03c3: usbfs for the cameras, hidraw for EAF/EFW.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="03c3", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="03c3", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# PlayerOne (POA cameras) — VID a0a0.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="a0a0", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Astroasis (Oasis focuser / filter wheel) — VID 338f. These are HID devices: the
+# driver talks over hidraw (/dev/hidrawN), so the hidraw node is what needs access.
+KERNEL=="hidraw*", ATTRS{idVendor}=="338f", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# FTDI-serial devices — VID 0403, appear as /dev/ttyUSB*: Pegasus FocusCube, Optec
+# FocusLynx, Astromi.ch MGPBox, Unihedron SQM, and the serial mounts (RST, OnStep, AM5).
+# /dev/ttyUSB* already belongs to the "dialout" group on Raspbian, so a non-root service
+# user in that group needs no rule — this line just also grants "plugdev"/the seat, keeping
+# every alpacahurd device on one group (see alpacahurd.service).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Add other vendors' idVendor here as you wire their drivers in — usbfs nodes use the
+# SUBSYSTEM=="usb" form, HID devices the hidraw form, FTDI/serial the SUBSYSTEM=="tty" form.

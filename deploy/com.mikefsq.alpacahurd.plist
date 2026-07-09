@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- launchd unit for alpacahurd (the macOS analogue of deploy/alpacahurd.service).
+     Installed by deploy/install-macos.sh to /Library/LaunchDaemons/. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.mikefsq.alpacahurd</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/alpacahurd</string>
+		<string>-config</string>
+		<string>/etc/alpacahurd/hurd.json</string>
+	</array>
+
+	<!-- Start at boot; restart only after a failure (systemd Restart=on-failure). -->
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+
+	<!-- Everything logs to stderr; launchd lands it here. -->
+	<key>StandardOutPath</key>
+	<string>/var/log/alpacahurd.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/alpacahurd.log</string>
+</dict>
+</plist>

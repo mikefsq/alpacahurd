@@ -1,0 +1,32 @@
+[Unit]
+Description=alpacahurd — a herd of ASCOM Alpaca device drivers (mounts, cameras, focusers, filter wheels, observing conditions)
+Documentation=https://github.com/mikefsq/alpacahurd
+# Wait for the network so discovery binds and networked mounts are reachable.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Validate the config before starting, so a typo fails fast with a readable
+# journal message instead of a crash loop.
+ExecStartPre=/usr/local/bin/alpacahurd -check -config /etc/alpacahurd/hurd.json
+ExecStart=/usr/local/bin/alpacahurd -config /etc/alpacahurd/hurd.json
+# Restart if the process exits non-zero (e.g. a device goroutine panics — the
+# whole herd shares one process, so systemd is the recovery net).
+Restart=on-failure
+RestartSec=5
+
+# Device access. Running as root is the simplest path on a dedicated Pi: it can
+# open USB (usbfs), serial (/dev/tty*), and hidraw without extra plumbing.
+# To harden, create a service user and grant the device groups instead of root:
+#   sudo useradd --system --no-create-home alpacahurd
+#   sudo usermod -aG dialout,plugdev alpacahurd     # serial + USB/HID
+# then the shipped udev rules give plugdev access to the relevant idVendors; set:
+#   User=alpacahurd
+#   SupplementaryGroups=dialout plugdev
+User=root
+
+# Alpaca HTTP serves on each device's config "port"; discovery answers UDP 32227.
+
+[Install]
+WantedBy=multi-user.target
