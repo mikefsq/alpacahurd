@@ -10,25 +10,25 @@ go 1.25.0
 require (
 	github.com/mikefsq/goalpaca v0.3.1
 	github.com/mikefsq/goindi v0.0.0-20260623000347-2dda0b2dec05
-	github.com/mikefsq/lx200 v0.2.1-0.20260713175537-92b30a2f2ba4
+	github.com/mikefsq/lx200 v0.2.1
 	golang.org/x/net v0.46.0
 )
 
 require (
-	github.com/mikefsq/goalpaca-devices/asiam5 v0.0.0-20260713180420-dc7fa975374b
-	github.com/mikefsq/goalpaca-devices/asieaf v0.0.0-20260713180420-dc7fa975374b
-	github.com/mikefsq/goalpaca-devices/asiefw v0.0.0-20260713180420-dc7fa975374b
-	github.com/mikefsq/goalpaca-devices/astrocam v0.0.0-20260713180420-dc7fa975374b
-	github.com/mikefsq/goalpaca-devices/focuscube v0.0.0-20260713180420-dc7fa975374b
-	github.com/mikefsq/goalpaca-devices/focuslynx v0.0.0-20260713180420-dc7fa975374b
-	github.com/mikefsq/goalpaca-devices/mgpbox v0.0.0-20260713180420-dc7fa975374b
-	github.com/mikefsq/goalpaca-devices/oasisfoc v0.0.0-20260713180420-dc7fa975374b
-	github.com/mikefsq/goalpaca-devices/oasisfw v0.0.0-20260713180420-dc7fa975374b
-	github.com/mikefsq/goalpaca-devices/onstep v0.0.0-20260713180420-dc7fa975374b
-	github.com/mikefsq/goalpaca-devices/rst v0.0.0-20260713180420-dc7fa975374b
-	github.com/mikefsq/goalpaca-devices/sim v0.0.0-20260713180420-dc7fa975374b
-	github.com/mikefsq/goalpaca-devices/tenmicron v0.0.0-20260713180420-dc7fa975374b
-	github.com/mikefsq/goalpaca-devices/unihedron v0.0.0-20260713180420-dc7fa975374b
+	github.com/mikefsq/goalpaca-devices/asiam5 v0.0.0-20260713202729-46ba0c79bc2a
+	github.com/mikefsq/goalpaca-devices/asieaf v0.0.0-20260713202729-46ba0c79bc2a
+	github.com/mikefsq/goalpaca-devices/asiefw v0.0.0-20260713202729-46ba0c79bc2a
+	github.com/mikefsq/goalpaca-devices/astrocam v0.0.0-20260713202729-46ba0c79bc2a
+	github.com/mikefsq/goalpaca-devices/focuscube v0.0.0-20260713202729-46ba0c79bc2a
+	github.com/mikefsq/goalpaca-devices/focuslynx v0.0.0-20260713202729-46ba0c79bc2a
+	github.com/mikefsq/goalpaca-devices/mgpbox v0.0.0-20260713202729-46ba0c79bc2a
+	github.com/mikefsq/goalpaca-devices/oasisfoc v0.0.0-20260713202729-46ba0c79bc2a
+	github.com/mikefsq/goalpaca-devices/oasisfw v0.0.0-20260713202729-46ba0c79bc2a
+	github.com/mikefsq/goalpaca-devices/onstep v0.0.0-20260713202729-46ba0c79bc2a
+	github.com/mikefsq/goalpaca-devices/rst v0.0.0-20260713202729-46ba0c79bc2a
+	github.com/mikefsq/goalpaca-devices/sim v0.0.0-20260713202729-46ba0c79bc2a
+	github.com/mikefsq/goalpaca-devices/tenmicron v0.0.0-20260713202729-46ba0c79bc2a
+	github.com/mikefsq/goalpaca-devices/unihedron v0.0.0-20260713202729-46ba0c79bc2a
 )
 
 require (
@@ -42,4 +42,5 @@ require (
 	github.com/mikefsq/unihedron v0.1.0 // indirect
 	go.bug.st/serial v1.7.1 // indirect
 	golang.org/x/sys v0.43.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

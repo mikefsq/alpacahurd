@@ -6,6 +6,7 @@
     Pass a target as the first argument (default "all"):
       help        show this list
       workspace   (re)write go.work over the sibling checkouts (pre-release only)
+      tidy        resolve every dependency from the module proxy (no siblings needed)
       gen         regenerate drivers_gen.go from hurd.conf
       build       build alpacahurd.exe
       all         gen + build (default)
@@ -15,7 +16,7 @@
       clean       remove the built binary
 
 .EXAMPLE
-    .\make.ps1 workspace
+    .\make.ps1 tidy      # fresh clone, no sibling repos: resolve from the proxy
     .\make.ps1
     .\make.ps1 install
 
@@ -61,6 +62,7 @@ function Target-Help {
 alpacahurd make.ps1 targets:
   help        show this list
   workspace   (re)write go.work over the sibling checkouts (pre-release only)
+  tidy        resolve every dependency from the module proxy (no siblings needed)
   gen         regenerate drivers_gen.go from hurd.conf
   build       build $Bin
   all         gen + build (default)
@@ -69,9 +71,15 @@ alpacahurd make.ps1 targets:
   uninstall   remove the task and firewall rule (admin; config kept)
   clean       remove the built binary
 
-Pre-release: run '.\make.ps1 workspace' once, with the sibling repos checked out
-next to this one. Once the modules are published this step is unnecessary and a
-plain 'go build' resolves everything from the module proxy.
+Two ways to resolve the dependencies on a fresh box:
+
+  .\make.ps1 tidy        no sibling checkouts — everything comes from the module
+                         proxy and is pinned in go.mod/go.sum. Run this once,
+                         then '.\make.ps1'. Committing the resulting go.mod and
+                         go.sum makes a plain clone build with no setup at all.
+
+  .\make.ps1 workspace   the sibling repos checked out next to this one, tracked
+                         at their local HEAD through a gitignored go.work.
 "@ | Write-Host
 }
 
@@ -92,6 +100,17 @@ function Target-Workspace {
 }
 
 function Target-Gen  { Invoke-Native go @("run", ".\internal\gendrivers") }
+
+function Target-Tidy {
+    # Regenerate drivers_gen.go, then resolve every dependency from the module
+    # proxy into go.mod/go.sum — no sibling checkouts needed. (This used to pre-
+    # `go get` astromi.ch/unihedron/lx200 to work around stale published go.mods;
+    # goalpaca-devices was republished with correct requirements, so a plain tidy
+    # now resolves the whole graph.)
+    Target-Gen
+    Invoke-Native go @("mod", "tidy")
+    Write-Host "go.mod/go.sum resolved from the module proxy"
+}
 
 function Target-Build {
     # The Windows transports are pure Go; no C toolchain required.
@@ -166,6 +185,7 @@ try {
         "help"      { Target-Help }
         "workspace" { Target-Workspace }
         "gen"       { Target-Gen }
+        "tidy"      { Target-Tidy }
         "build"     { Target-Build }
         "all"       { Target-All }
         "test"      { Target-Test }

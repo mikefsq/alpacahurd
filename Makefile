@@ -1,11 +1,13 @@
 # alpacahurd — build and install the herd. Run `make help` for the targets.
 #
-# Pre-release, the libraries aren't tagged: everything tracks HEAD through the
-# go.work workspace, so `make` needs the sibling repos checked out next to this
-# one and a go.work over them (`make workspace`). `make tidy` is for later, once
-# the modules are published and a plain clone can resolve them from the proxy.
+# Two ways to resolve the internal dependencies:
+#   make tidy       pins everything from the module proxy into go.mod/go.sum — no
+#                   sibling checkouts needed (the modules are published). Run once,
+#                   then `make`; committing go.mod/go.sum makes a plain clone build.
+#   make workspace  overlays a gitignored go.work on the sibling repos checked out
+#                   next to this one, tracking their local HEAD (for library dev).
 #
-# On Windows (no make): go work use over the siblings, then `go build`.
+# On Windows (no make): use make.ps1 (tidy/workspace/build/...).
 
 BIN := alpacahurd
 
@@ -21,8 +23,8 @@ endif
 
 # Sibling module checkouts the workspace overlays, resolved relative to this
 # repo. The goalpaca-devices drivers are the default hurd.conf set; the rest are
-# the libraries they and the engine depend on. asiccd/asicaa (ZWO SDK, cgo) and
-# the deprecated fleet are intentionally omitted.
+# the libraries they and the engine depend on. asiccd/asicaa (ZWO SDK, cgo) are
+# intentionally omitted.
 WS_DIRS := . \
 	../goalpaca ../lx200 ../goindi ../astrocam ../goasi \
 	../oasis-astro ../optec ../pegasus-astro ../astromi.ch ../unihedron \
@@ -44,9 +46,9 @@ help: ## list the targets
 		| sort \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[1m%-10s\033[0m %s\n", $$1, $$2}'
 	@echo
-	@echo "Pre-release: run 'make workspace' once on a fresh box (needs the sibling"
-	@echo "repos checked out next to this one); go.work is gitignored. 'make tidy' is"
-	@echo "for later, once the modules are published."
+	@echo "'make tidy' resolves every dependency from the module proxy (no sibling"
+	@echo "checkouts needed). 'make workspace' instead overlays a gitignored go.work"
+	@echo "on the sibling repos next to this one, tracking their local HEAD."
 
 gen: ## regenerate drivers_gen.go from hurd.conf
 	go run ./internal/gendrivers
@@ -67,10 +69,10 @@ workspace: ## (re)write go.work over the present sibling checkouts
 build: ## build only (skip regeneration)
 	CGO_ENABLED=$(CGO) go build -o $(BIN) .
 
-# tidy resolves module requirements from the network — only meaningful once the
-# libraries are published/tagged. Pre-release this fails on the untagged deps;
-# use `make workspace` instead.
-tidy: ## resolve module versions from the network (publish prep only)
+# tidy resolves every module requirement from the proxy into go.mod/go.sum, so a
+# fresh clone builds with no sibling checkouts. (`make workspace` is the alternative:
+# track the siblings' local HEAD through go.work instead.)
+tidy: ## resolve module versions from the module proxy (no siblings needed)
 	go run ./internal/gendrivers
 	go mod tidy
 
