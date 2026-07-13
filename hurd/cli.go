@@ -102,7 +102,7 @@ func checkConfig(w io.Writer, cfg *Config) int {
 		errs++
 	}
 
-	ports := map[int]string{}    // port -> driver, for duplicate detection
+	ports := map[int]string{}      // port -> driver, for duplicate detection
 	indiNames := map[string]bool{} // INDI ids must be unique on the hub
 	enabled := 0
 	for _, spec := range cfg.Devices {

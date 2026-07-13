@@ -7,6 +7,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"go/format"
 	"log"
 	"os"
 	"strings"
@@ -64,7 +65,13 @@ func main() {
 	}
 	b.WriteString(")\n")
 
-	if err := os.WriteFile("drivers_gen.go", []byte(b.String()), 0o644); err != nil {
+	// Run the output through gofmt so the checked-in file is import-sorted and
+	// gofmt-clean regardless of the order lines appear in hurd.conf.
+	src, err := format.Source([]byte(b.String()))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := os.WriteFile("drivers_gen.go", src, 0o644); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("gendrivers: %d driver package(s) -> drivers_gen.go\n", len(paths))
