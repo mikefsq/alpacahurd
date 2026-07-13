@@ -16,6 +16,7 @@ import (
 	_ "github.com/mikefsq/goalpaca-devices/oasisfw"
 	_ "github.com/mikefsq/goalpaca-devices/onstep"
 	_ "github.com/mikefsq/goalpaca-devices/rst"
+	_ "github.com/mikefsq/goalpaca-devices/sim" // sim-* devices (the root binary selects them via hurd.conf)
 	_ "github.com/mikefsq/goalpaca-devices/tenmicron"
 	_ "github.com/mikefsq/goalpaca-devices/unihedron"
 )

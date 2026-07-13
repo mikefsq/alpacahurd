@@ -1,17 +1,16 @@
 {
   "discovery": "direct",
   "listen": ["en0"],
-  "indi":  { "enable": true, "port": 7624 },
   "lx200": { "enable": true, "basePort": 4030 },
 
   "devices": [
     { "driver": "tenmicron", "port": 11110, "name": "10Micron", "addr": "10.0.1.51:3492",
       "aperture": 200, "focalLength": 1600,
       "guiderAperture": 60, "guiderFocalLength": 240,
-      "indi": true, "guideRate": 0.5 },
+      "guideRate": 0.5 },
 
     { "driver": "asicam", "port": 11111, "serial": "1a2b3c4d", "name": "Main camera", "fixdefects": true },
-    { "driver": "asicam", "port": 11112, "serial": "5e6f7a8b", "name": "Guide camera", "fixdefects": true, "indi": true },
+    { "driver": "asicam", "port": 11112, "serial": "5e6f7a8b", "name": "Guide camera", "fixdefects": true },
 
     { "driver": "oasisfoc", "port": 11120, "index": 0 },
 

@@ -19,4 +19,5 @@ import (
 	_ "github.com/mikefsq/goalpaca-devices/oasisfw"
 	_ "github.com/mikefsq/goalpaca-devices/mgpbox"
 	_ "github.com/mikefsq/goalpaca-devices/unihedron"
+	_ "github.com/mikefsq/goalpaca-devices/sim"
 )

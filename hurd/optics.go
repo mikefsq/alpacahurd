@@ -6,7 +6,7 @@ import (
 )
 
 // opticsHolder is the shared source of truth for one mount's optical train. The
-// fleet injects the same holder into the Alpaca telescope (UseOptics) and the INDI
+// herd injects the same holder into the Alpaca telescope (UseOptics) and the INDI
 // mount device (WithOptics), so a setoptics Action over Alpaca is reported by INDI's
 // TELESCOPE_INFO. It satisfies tenmicron-alpaca's OpticsStore (metres) and
 // goindi/mount's Optics (mm) structurally.

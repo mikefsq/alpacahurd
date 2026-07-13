@@ -1,14 +1,13 @@
 {
   "discovery": "direct",
 
-  "indi":  { "enable": true, "port": 7624 },
   "lx200": { "enable": true, "basePort": 4030 },
 
   "devices": [
     { "driver": "sim-telescope",           "port": 11110, "name": "Sim Mount",
-      "aperture": 130, "focalLength": 1000, "indi": true },
+      "aperture": 130, "focalLength": 1000 },
     { "driver": "sim-camera",              "port": 11111, "name": "Sim Main Camera" },
-    { "driver": "sim-camera",              "port": 11112, "name": "Sim Guide Camera", "indi": true },
+    { "driver": "sim-camera",              "port": 11112, "name": "Sim Guide Camera" },
     { "driver": "sim-focuser",             "port": 11120, "name": "Sim Focuser" },
     { "driver": "sim-filterwheel",         "port": 11123, "name": "Sim Filter Wheel" },
     { "driver": "sim-rotator",             "port": 11130, "name": "Sim Rotator" },

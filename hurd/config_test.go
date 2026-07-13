@@ -28,7 +28,7 @@ func TestResolveConfigPath(t *testing.T) {
 	// With no flag and no env, the current directory's hurd.json is found first.
 	t.Setenv("ALPACAHURD_CONFIG", "")
 	dir := t.TempDir()
-	t.Chdir(dir)
+	chdir(t, dir)
 	if err := os.WriteFile(filepath.Join(dir, "hurd.json"), []byte(`{"devices":[]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestResolveConfigPathNotFound(t *testing.T) {
 		t.Skip("/etc/alpacahurd/hurd.json exists on this host")
 	}
 	t.Setenv("ALPACAHURD_CONFIG", "")
-	t.Chdir(t.TempDir()) // empty dir → no ./hurd.json
+	chdir(t, t.TempDir()) // empty dir → no ./hurd.json
 	_, err := resolveConfigPath("")
 	if err == nil {
 		t.Fatal("want an error when no config file exists anywhere")
@@ -106,6 +106,21 @@ func TestCommonKeysMatchRegistry(t *testing.T) {
 	if !reflect.DeepEqual(engine, shared) {
 		t.Fatalf("deviceCommon keys %v != registry.CommonKeys %v", engine, shared)
 	}
+}
+
+// chdir enters dir for the duration of the test and restores the prior working
+// directory afterward. It is the pre-1.24 equivalent of testing.T.Chdir, so the
+// module builds and tests on Go 1.23.
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
 }
 
 // parseSpec builds a DeviceSpec from a JSON entry the way LoadConfig does.

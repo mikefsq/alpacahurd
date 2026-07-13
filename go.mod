@@ -1,6 +1,6 @@
 module github.com/mikefsq/alpacahurd
 
-go 1.25.0
+go 1.23
 
 // The driver-module requirements (github.com/mikefsq/goalpaca-devices/...,
 // selected by hurd.conf -> drivers_gen.go) are added by `make gen`, which runs

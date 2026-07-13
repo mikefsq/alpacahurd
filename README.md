@@ -1,61 +1,45 @@
 # alpacahurd
 
-A herd of [ASCOM Alpaca](https://ascom-standards.org/) astronomy device drivers
-in **one binary, one process, one config file** — built for the small, silent
-box at the telescope. Point it at your hardware once; NINA, PHD2, Stellarium,
-or any Alpaca client then finds every device over the network, with hotplug
-handled for you.
+A herd of open source [ASCOM Alpaca](https://ascom-standards.org/) astronomy 
+device drivers in **one static binary, one config file**, built for the
+low power mini pc at the telescope. Configure it your hardware once, and NINA, 
+PHD2, Stellarium, or any other Alpaca client discovers every device over the 
+network. Hotplug is handled automatically.
 
-(Yes, *hurd*: it's a herd of alpaca daemons. Not a typo.)
-
-- **Typed, standard interfaces.** Every device is a standard ASCOM device
-  (telescope, camera, focuser, …) with the standard members. Clients need no
-  per-vendor code.
+- **Typed, standard interfaces.** Every device is a standard ASCOM device with 
+  the standard members. Clients need no per-vendor code.
 - **Hotplug by design.** Every configured device runs its own
   acquire/monitor/re-acquire loop: start the herd on an empty bus, plug things
   in whenever, unplug one without disturbing the rest.
 - **One discovery responder.** Clients auto-discover every device via UDP 32227
   (IPv4 broadcast + IPv6 multicast).
-- **Extra front-ends included.** The same device objects can also serve INDI
-  (for PHD2) and LX200 over TCP (for Stellarium/SkySafari) — no
-  `indiserver`, no translation layers.
+- **LX200 front-end included.** Each mount object can serve a Meade-LX200 over
+  TCP for Stellarium and SkySafari.
 - **Open-source drivers, chosen at build time.** `hurd.conf` lists the driver
   packages compiled in; anyone can publish a driver module (see
   [DRIVERS.md](DRIVERS.md)).
 
 ## Platforms
 
-The targets are the machines that live at the telescope:
+The targets are the low power mini pcs at the telescope:
 
-- **Any Linux mini-PC or SBC** — a Raspberry Pi (CM5/5/4), an N100-class box,
-  whatever you have. One static arm64/amd64 binary, systemd, udev; a few MB of
-  RAM for the whole herd.
-- **Repurposed appliance hardware** — an ASIAIR or a StellarMate is a Raspberry
-  Pi in a nice weatherproof case. Reflash it with stock Raspberry Pi OS
-  (arm64) and it's a first-class alpacahurd host running an all-open stack on
-  the vendor's own hardware.
-- **A Mac mini** at the scope — same appliance model, launchd instead of
-  systemd.
-
-**Windows** works too (alpacahurd + NINA on one box is a fine setup), but it
-isn't *necessary* there the way it is on Linux/macOS: ASCOM ships its own
-orchestration and simulators, and every vendor ships a Windows installer. The
-reason to run alpacahurd on Windows is wanting an open-source driver stack.
-Otherwise, a Windows machine is typically the network client of a herd
-running elsewhere.
+- **Any mini-PC or SBC**, such as a Raspberry Pi or an N100 mini pc. 
+  The whole herd compiles to one static arm64/amd64 binary that runs
+  under systemd, uses udev for device access, and needs only a few MB of RAM.
+- **Repurposed appliance hardware.** An ASIAIR or a StellarMate is a Raspberry
+  Pi in a weatherproof case. Reflash it with stock Raspberry Pi OS (arm64) to
+  get a first-class alpacahurd host that runs an all-open stack on the vendor's
+  own hardware.
+- **A Mac mini** at the scope runs the same appliance model, under launchd in
+  place of systemd.
 
 The USB/HID transports underneath the drivers are per-platform:
 
 | Platform | Transport | Build |
 |---|---|---|
-| Linux (incl. Raspberry Pi) | usbfs / hidraw / serial — pure Go | `CGO_ENABLED=0`, static binary, easy cross-compile |
-| macOS | IOKit / IOUSBHost — **cgo** | build natively on a Mac with the Xcode command-line tools |
-| Windows | WinUSB / HID / serial — pure Go | plain `go build`, no C toolchain |
-
-The Linux and macOS paths are hardware-validated; the Windows transports are
-compile-checked mirrors of the Linux ones and want a hardware shakedown —
-reports welcome. Networked mounts (e.g. `tenmicron`) and the `sim-*` devices
-are plain TCP and identical everywhere.
+| Linux | usbfs / hidraw / serial | plain `go build`, no C toolchain  |
+| macOS | IOKit / IOUSBHost — **cgo** | plain `go build` with the Xcode command-line tools for cgo |
+| Windows | WinUSB / HID / serial | plain `go build`, no C toolchain |
 
 **Windows + ZWO cameras:** the drivers here contain no ZWO code, but Windows
 gives a USB device to exactly one kernel driver, and the pure-Go transport
@@ -67,16 +51,30 @@ their ASCOM driver) won't see the camera until you revert it in Device Manager.
 Linux needs none of this — usbfs coexists with everything (just udev
 permissions, which `make install` handles).
 
-## Install on Linux (Raspberry Pi, mini-PC, reflashed ASIAIR/StellarMate)
+## Building from source
 
-Needs Go ≥ 1.25. Distro apt versions are usually too old — install the
-official toolchain once (swap `arm64` for `amd64` on an x86 mini-PC):
+`make help` lists every target. The default `make` regenerates `drivers_gen.go`
+from `hurd.conf` and builds `./alpacahurd` — no network access.
+
+Not all library modules are tagged, so a development build needs track the
+source through a Go workspace rather than the module proxy. Check out the sibling
+repos next to this one (the set is listed as `WS_DIRS` in the `Makefile`) and
+write a `go.work` over them once:
 
 ```sh
-curl -LO https://go.dev/dl/go1.25.0.linux-arm64.tar.gz
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.25.0.linux-arm64.tar.gz
-echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.profile && source ~/.profile
+make workspace   # (re)writes go.work over whichever sibling checkouts it finds
+make             # regenerate drivers_gen.go, then build
 ```
+
+`make workspace` names any sibling it can't find, so clone that one and re-run.
+Once the modules are published this step disappears and a plain `git clone &&
+make` resolves everything from the proxy — the install sections below are written
+for that end state, so run `make workspace` first until then.
+
+## Install on Linux
+
+Needs Go ≥ 1.23. Debian 13 Trixie ships go 1.24. If needed install the
+official toolchain [go.dev/dl](https://go.dev/dl/)).
 
 Then:
 
@@ -84,6 +82,7 @@ Then:
 git clone https://github.com/mikefsq/alpacahurd
 cd alpacahurd
 nano hurd.conf        # optional: trim the driver list, or add third-party drivers
+make workspace        # pre-release only — see "Building from source" above
 make                  # regenerates the driver imports and builds ./alpacahurd
 sudo make install     # binary + systemd service + udev rules + starter config
 sudo nano /etc/alpacahurd/hurd.json    # enable YOUR devices (see below)
@@ -92,18 +91,20 @@ journalctl -u alpacahurd -f            # watch it acquire your hardware
 ```
 
 The starter config seeded by `make install` lists **every compiled-in driver,
-disabled**. Enable the entries you own, fill in serials/addresses, restart.
-That's the whole deployment.
+disabled**. Enable the entries for the hardware you own, fill in their serials
+or addresses, and restart the service.
 
 ## Install on macOS
 
-Needs Go ≥ 1.25 (`brew install go` or [go.dev/dl](https://go.dev/dl/)) and the
+Needs Go ≥ 1.23 (`brew install go` or [go.dev/dl](https://go.dev/dl/)) and the
 Xcode command-line tools (`xcode-select --install`) — the macOS USB/HID
 transports use IOKit via cgo.
 
 ```sh
 git clone https://github.com/mikefsq/alpacahurd
 cd alpacahurd
+nano hurd.conf        # optional: trim the driver list, or add third-party drivers
+make workspace        # pre-release only — see "Building from source" above
 make                  # builds with cgo automatically on Darwin
 sudo make install     # launchd daemon (com.mikefsq.alpacahurd) + starter config
 sudo nano /etc/alpacahurd/hurd.json
@@ -117,29 +118,31 @@ needed — the daemon runs as root and IOKit handles device access.
 
 ## Install on Windows
 
-Needs Go ≥ 1.25 ([go.dev/dl](https://go.dev/dl/)); no C toolchain, no make.
-From PowerShell or cmd in the repo directory:
+Needs Go ≥ 1.23 ([go.dev/dl](https://go.dev/dl/)); no C toolchain. `make.ps1`
+is the Windows counterpart of the Makefile (`.\make.ps1 help` lists the
+targets). From PowerShell in the repo directory:
 
 ```powershell
-go run ./internal/gendrivers      # only needed if you edited hurd.conf
-go mod tidy
-go build -o alpacahurd.exe .
-.\alpacahurd.exe -example > hurd.json    # then edit: enable your devices
-.\alpacahurd.exe -check
-.\alpacahurd.exe                          # finds .\hurd.json automatically
+.\make.ps1 workspace   # pre-release only: writes go.work over the sibling checkouts
+.\make.ps1             # gen + build -> alpacahurd.exe
+.\make.ps1 install     # elevated: install binary + config, startup task, firewall rule
 ```
 
-Allow it through Windows Firewall when prompted (Alpaca HTTP on your device
-ports + UDP 32227 discovery). To start it at boot without a logged-in session,
-register a scheduled task (run as an elevated prompt):
+`install` seeds `%ProgramData%\alpacahurd\hurd.json` (every driver, disabled),
+validates it, registers a SYSTEM startup task that restarts on failure — the
+Windows analogue of the systemd service — and opens the firewall for the binary.
+Then edit the config and restart:
 
 ```powershell
-schtasks /Create /TN alpacahurd /SC ONSTART /RU SYSTEM ^
-  /TR "C:\path\to\alpacahurd.exe -config C:\path\to\hurd.json"
+notepad $env:ProgramData\alpacahurd\hurd.json
+Restart-ScheduledTask -TaskName alpacahurd
 ```
 
-Bind ZWO cameras to the WinUSB driver with Zadig first (see
-[Platforms](#platforms) — ZWO's own driver is not WinUSB-compatible).
+If the script is blocked by execution policy, run it as
+`powershell -ExecutionPolicy Bypass -File .\make.ps1 <target>`. Once the modules
+are published the `workspace` step is unnecessary. Bind ZWO cameras to the
+WinUSB driver with Zadig first (see [Platforms](#platforms) — ZWO's own driver
+is not WinUSB-compatible).
 
 ## Configure devices
 
@@ -161,11 +164,10 @@ overrides the search.
 }
 ```
 
-Each entry is one device on its own Alpaca `"port"` (required, unique), always
-as device number 0 of its type there. `"enable": false` turns an entry off
-without deleting it. Prefer `serial`/`addr` binding where a driver supports it —
-a stable identity that survives replugs and index shuffles; `index` selects the
-Nth attached unit and is fine for a single device.
+Each entry is one device on its own Alpaca `"port"` (required and unique), and is
+registered as device number 0 of its type on that port. `"enable": false` turns
+an entry off without deleting it. Bind by `serial` or `addr` or by its discovery
+`index` depending on the driver. 
 
 The binary documents itself:
 
@@ -176,75 +178,50 @@ alpacahurd -example asicam     # print one driver's entry
 alpacahurd -check              # validate the config without touching hardware
 ```
 
-`-check` also runs as the systemd `ExecStartPre`, so a typo'd config fails
-fast with a readable journal message instead of a crash loop. Unknown config
-keys are rejected — top-level by the loader, per-entry by each driver — so
-typos are reported, not silently ignored.
-
-A full worked example (INDI, LX200, optics, weather→mount feed) is in
+An example config (LX200, optics, weather→mount feed) is in
 [`config/hurd.example.json`](config/hurd.example.json).
 
 ## Choosing drivers (hurd.conf)
 
-[`hurd.conf`](hurd.conf) lists the driver packages compiled into the binary,
-one Go import path per line — comment out what you don't need, append any
-third-party driver's public module path, and `make`. The generated
-`drivers_gen.go` is checked in with the full default set, so an untouched
-clone builds with plain `go build`. To pin a driver version:
-`go get <module>@<version>` after `make gen`.
+[`hurd.conf`](hurd.conf) lists the driver packages compiled into the binary.
+Append any third-party driver's public module path, and rebuild. `make` runs
+`make gen` first, which regenerates the checked-in `drivers_gen.go` from the
+file. To pin a driver to a specific version: `go get <module>@<version>`.
 
-Drivers register themselves with `goalpaca/registry` at init; writing one is
-a small amount of glue over your hardware library — see
-[DRIVERS.md](DRIVERS.md).
+Drivers register themselves with `goalpaca/registry` at init. Writing one is a
+small amount of glue over a hardware library; see [DRIVERS.md](DRIVERS.md).
 
-## Extra front-ends: INDI and LX200
+## LX200 front-end (Stellarium, SkySafari)
 
-Beyond Alpaca, the same device objects can be served over other native
-protocols — sibling front-ends onto one device object, so state stays
-consistent across all of them.
-
-- **INDI** (PHD2): set a top-level `"indi": { "enable": true, "port": 7624 }`.
-  One in-process INDI server multiplexes devices by **device name** on a single
-  port. Membership is opt-in per device: `"indi": true`. Mounts join as a
-  telescope+guider; `asicam` and `sim-camera` join as CCD guide cameras
-  (`asicam` with gain/offset/subframe as `CCD_CONTROLS`/`CCD_FRAME`). Give INDI
-  devices an explicit `"name"` — that's what PHD2 shows, and names must be
-  unique. A mount's `"guideRate"` (fraction of sidereal, default 0.5) is
-  reported to PHD2; tenmicron/asiam5 report the mount's actual rate instead.
-- **LX200** (Stellarium, SkySafari): set `"lx200": { "enable": true, "basePort": 4030 }`.
-  LX200 can't multiplex, so every mount gets its own port from `basePort`
-  upward; a mount can pin one with `"lx200Port": N` (which also enables LX200
-  for just that mount). `"readOnlySite": true` stops an atlas from overwriting
-  a modeled mount's surveyed site/clock.
-
-Alpaca clients still auto-discover via UDP 32227 as before; these are additive.
+Each mount object can also serve a Meade-LX200 TCP server. Set
+`"lx200": { "enable": true, "basePort": 4030 }`. LX200 cannot multiplex, so every
+mount gets its own port counting up from `basePort`, and a mount can pin one with
+`"lx200Port": N` (which also enables LX200 for that mount alone).
+`"readOnlySite": true` prevents an atlas from overwriting a modeled mount's
+surveyed site and clock.
 
 ## Simulated devices
 
-Every binary includes a full set of `sim-*` drivers, one per ASCOM type —
-testability is how this ecosystem stays verifiably reliable on installed
-machines. [`config/hurd.sim.json`](config/hurd.sim.json) serves a complete
-no-hardware herd:
+The `sim` module provides a full set of `sim-*` drivers. It is listed in 
+`hurd.conf` by default, so every stock build can serve a complete
+no-hardware herd for verifying an install and developing clients. Comment the
+`sim` line out of `hurd.conf` to disable this.
+[`config/hurd.sim.json`](config/hurd.sim.json) is the ready-made sim herd:
 
 ```sh
 ./alpacahurd -config config/hurd.sim.json
 ```
 
-`sim-telescope` and `sim-camera` share one simulated sky with a drifting star
-and a closed guide loop, and they join the INDI/LX200 front-ends — so PHD2 can
-connect the sim mount and sim guide camera and run a real calibration, and
-Stellarium can slew the mount, before any hardware exists.
-
 ## Restricting interfaces, IPv6, logging
 
-- `"listen": ["lo", "eth0"]` restricts every server (Alpaca, INDI, LX200,
-  discovery) to those interfaces. An interface name serves both IP stacks; a
-  bare IPv4 literal is IPv4-only. Omit to bind everything.
+- `"listen": ["lo", "eth0"]` restricts every server (Alpaca, LX200, discovery)
+  to those interfaces. An interface name serves both IP stacks; a bare IPv4
+  literal is IPv4-only. Omit to bind everything.
 - `"ipv6": false` turns off the IPv6 discovery responder (multicast group
   `ff12::a1:9aca`); IPv4 broadcast is unaffected.
 - Everything logs to stderr → the journal. `"debug": true` adds per-request
-  Alpaca and per-message INDI logging; lifecycle lines (listening, device
-  acquired/lost with reason, client connects) print regardless.
+  Alpaca logging; lifecycle lines (listening, device acquired/lost with reason,
+  client connects) print regardless.
 
 ## USB permissions (udev)
 
@@ -273,15 +250,3 @@ macOS binaries must be built on a Mac (the IOKit transports need cgo).
 
 `sudo make uninstall` removes the service and binary on Linux (systemd + udev
 rules) and macOS (launchd); the config in `/etc/alpacahurd` is kept.
-
-## Development
-
-Local development against unpublished sibling checkouts uses a `go.work`
-workspace (gitignored; see the comment in this repo's `go.work` for the
-layout). `make gen` runs `go mod tidy`, which needs the driver modules'
-registration changes published — during development, build with `make build`
-or `go build` instead.
-
-alpacahurd is the successor of the `fleet` (astrofleet) prototype that lived
-in `goalpaca-devices`; the engine is the same, with driver knowledge moved
-into the driver modules via `goalpaca/registry`.

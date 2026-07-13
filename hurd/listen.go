@@ -8,7 +8,7 @@ import (
 
 // resolveListen expands the config "listen" entries into the concrete host addresses
 // every TCP front-end binds to, plus the set of interface indexes those addresses
-// live on (used to scope discovery to where the fleet listens).
+// live on (used to scope discovery to where the herd listens).
 //
 // Each entry is either an interface name or an IP literal:
 //   - An interface name (e.g. "en0", "eth0", "lo") expands to all of that interface's

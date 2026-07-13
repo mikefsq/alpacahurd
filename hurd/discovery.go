@@ -20,10 +20,10 @@ const (
 	discoveryV6Group = "ff12::00a1:9aca" // IPv6 discovery multicast group
 )
 
-// runDiscovery answers Alpaca discovery probes on UDP 32227 for every fleet device
+// runDiscovery answers Alpaca discovery probes on UDP 32227 for every herd device
 // port, sending one {"AlpacaPort":N} datagram per port. The socket is bound with
 // SO_REUSEADDR/SO_REUSEPORT so it co-binds alongside other Alpaca servers on 32227.
-// When ifaces is non-empty (i.e. "listen" scopes the fleet), discovery answers only
+// When ifaces is non-empty (i.e. "listen" scopes the herd), discovery answers only
 // on those interfaces; a nil/empty ifaces answers on every interface.
 func runDiscovery(ctx context.Context, ports []int, ipv6 bool, ifaces map[int]bool) error {
 	resp := make([][]byte, len(ports))
@@ -50,7 +50,7 @@ func runDiscovery(ctx context.Context, ports []int, ipv6 bool, ifaces map[int]bo
 
 // listenV6 answers Alpaca IPv6 discovery probes. It binds one [::]:32227 socket and
 // joins the Alpaca multicast group on every up, multicast-capable interface, so the
-// fleet is discoverable on all links. Best-effort: a per-interface join failure is
+// herd is discoverable on all links. Best-effort: a per-interface join failure is
 // skipped; only a total failure returns an error and leaves IPv4 discovery running.
 func listenV6(ctx context.Context, lc net.ListenConfig, resp [][]byte, ifaces map[int]bool) error {
 	pc, err := lc.ListenPacket(ctx, "udp6", fmt.Sprintf("[::]:%d", discoveryPort))
@@ -84,7 +84,7 @@ func listenV6(ctx context.Context, lc net.ListenConfig, resp [][]byte, ifaces ma
 }
 
 // serveDiscovery answers probes on c. When ifaces is non-empty it replies only to
-// probes that arrived on one of those interfaces (so a "listen"-scoped fleet does
+// probes that arrived on one of those interfaces (so a "listen"-scoped herd does
 // not advertise on interfaces it isn't serving); a nil ifaces answers on all.
 func serveDiscovery(ctx context.Context, c *net.UDPConn, resp [][]byte, ifaces map[int]bool) {
 	defer c.Close()
