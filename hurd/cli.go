@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
+	"github.com/mikefsq/goalpaca/devicemain"
 	"github.com/mikefsq/goalpaca/registry"
 )
 
@@ -37,32 +40,51 @@ func printExample(w io.Writer, name string) error {
 		fmt.Fprintln(w, entry)
 		return nil
 	}
-
-	var entries []string
-	port := examplePortBase
-	for _, d := range registry.All() {
-		if strings.HasPrefix(d.Name, "sim-") {
-			continue // sims are listed by -drivers; ask for one by name
-		}
-		entry, err := exampleEntry(d, port, true)
-		if err != nil {
-			return err
-		}
-		entries = append(entries, "    "+entry)
-		port++
-	}
+	// Server blocks only. Devices live in devices.d beside this file, one per
+	// file; writeExampleDevicesDir seeds that directory.
 	out := "{\n" +
 		"  \"discovery\": \"direct\",\n" +
 		"  \"indi\":  { \"enable\": false, \"port\": 7624 },\n" +
 		"  \"lx200\": { \"enable\": false, \"basePort\": 4030 },\n" +
-		"  \"devices\": [\n" +
-		strings.Join(entries, ",\n") + "\n" +
-		"  ]\n" +
+		"  \"devices\": []\n" +
 		"}"
-	if !json.Valid([]byte(out)) {
-		return fmt.Errorf("assembled example config is not valid JSON (a driver's ConfigExample is malformed)")
-	}
 	fmt.Fprintln(w, out)
+	return nil
+}
+
+// writeExampleDevicesDir seeds dir with one disabled device file per compiled-in
+// hardware driver, <driver>.json, each holding the driver's ConfigExample plus a
+// sequential port. Existing files are left alone, so a re-run adds files for
+// newly compiled-in drivers without touching an admin's edits. It reports what
+// it wrote. Sims are skipped, as with -example; ask for one by name.
+func writeExampleDevicesDir(w io.Writer, dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	port := examplePortBase
+	for _, d := range registry.All() {
+		if strings.HasPrefix(d.Name, "sim-") {
+			continue
+		}
+		path := filepath.Join(dir, d.Name+".json")
+		thisPort := port
+		port++
+		if _, err := os.Stat(path); err == nil {
+			fmt.Fprintf(w, "keep   %s\n", path)
+			continue
+		}
+		// The seed documents every key at its default, all commented, so it
+		// changes nothing until a line is uncommented; driver and enable:false
+		// are the only live keys.
+		var b strings.Builder
+		if err := devicemain.WriteCommentedDeviceFile(&b, d, thisPort); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "wrote  %s\n", path)
+	}
 	return nil
 }
 
@@ -92,7 +114,7 @@ func exampleEntry(d registry.Driver, port int, disabled bool) (string, error) {
 }
 
 // checkConfig validates cfg by constructing every enabled device (no hardware
-// is touched — construction only binds identities). It prints one line per
+// is touched; construction only binds identities). It prints one line per
 // device and returns the number of errors; systemd runs this as ExecStartPre so
 // a bad config fails fast with a readable journal message.
 func checkConfig(w io.Writer, cfg *Config) int {
@@ -113,10 +135,23 @@ func checkConfig(w io.Writer, cfg *Config) int {
 			continue
 		}
 		enabled++
-		if spec.Port == 0 {
+		if spec.Port == 0 && spec.Instance == "" {
 			fail(spec, `"port" is required`)
 		}
 
+		switch res := resolveDriver(spec); res.kind {
+		case compiledIn:
+		case installedBinary:
+			fmt.Fprintf(w, "ok     %-22s separate binary %s %s\n", spec.Driver, res.exe, strings.Join(res.args, " "))
+			continue
+		default:
+			if spec.Instance != "" {
+				// An unresolvable devices.d fragment is a warning: serve skips it
+				// and keeps starting, so -check must not gate startup on it.
+				fmt.Fprintf(w, "warn   %-22s %s: driver is not compiled in and no binary was found; the entry will be skipped\n", spec.Driver, spec.Source)
+				continue
+			}
+		}
 		drv, dev, err := buildDevice(spec)
 		if err != nil {
 			fail(spec, "%v", err)
@@ -144,7 +179,11 @@ func checkConfig(w io.Writer, cfg *Config) int {
 			}
 		}
 
-		fmt.Fprintf(w, "ok     %-22s %s/%d on port %d  %q\n", spec.Driver, drv.Type, num, spec.Port, dev.Name())
+		if spec.Port == 0 {
+			fmt.Fprintf(w, "ok     %-22s %s/%d on a scanned port (from %d; recorded in the state file at first start)  %q\n", spec.Driver, drv.Type, num, portScanBase, dev.Name())
+		} else {
+			fmt.Fprintf(w, "ok     %-22s %s/%d on port %d  %q\n", spec.Driver, drv.Type, num, spec.Port, dev.Name())
+		}
 	}
 
 	if enabled == 0 {

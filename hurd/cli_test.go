@@ -6,20 +6,32 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mikefsq/goalpaca/devicemain"
+	"github.com/mikefsq/goalpaca/registry"
 )
 
 // TestExampleConfigIsUsable is the guard on every compiled-in driver's
-// ConfigExample: the assembled -example output (what install.sh seeds
-// /etc/alpacahurd/hurd.json with) must load, and every entry must be disabled
-// and pass checkConfig with zero errors.
+// ConfigExample: -example (server blocks) plus -example-devices (one disabled
+// file per hardware driver) is what install.sh seeds, and the pair must load
+// and pass checkConfig with zero errors, every device disabled.
 func TestExampleConfigIsUsable(t *testing.T) {
+	t.Setenv("ALPACA_STATE_DIR", t.TempDir())
+	root := t.TempDir()
 	var buf bytes.Buffer
 	if err := printExample(&buf, ""); err != nil {
 		t.Fatalf("printExample: %v", err)
 	}
-	path := filepath.Join(t.TempDir(), "hurd.json")
+	path := filepath.Join(root, "hurd.json")
 	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := writeExampleDevicesDir(&out, filepath.Join(root, "devices.d")); err != nil {
+		t.Fatalf("writeExampleDevicesDir: %v", err)
+	}
+	if !strings.Contains(out.String(), "wrote") {
+		t.Fatalf("nothing written:\n%s", out.String())
 	}
 	cfg, err := LoadConfig(path)
 	if err != nil {
@@ -32,16 +44,51 @@ func TestExampleConfigIsUsable(t *testing.T) {
 		if d.enabled() {
 			t.Errorf("example entry %q is enabled; the seed config must start all-disabled", d.Driver)
 		}
-		if d.Port == 0 {
-			t.Errorf("example entry %q has no port", d.Driver)
+		// Every key but driver and enable is commented in a seed, port included,
+		// so a loaded seed has no port. -check skips a disabled entry before
+		// requiring one.
+		if d.Port != 0 {
+			t.Errorf("example entry %q has a live port %d; the seed should comment it", d.Driver, d.Port)
 		}
 		if strings.HasPrefix(d.Driver, "sim-") {
 			t.Errorf("example includes %q; sims are requested by name, not seeded", d.Driver)
 		}
+		if d.Instance != d.Driver {
+			t.Errorf("example file for %q should be named after the driver, got instance %q", d.Driver, d.Instance)
+		}
 	}
-	var out bytes.Buffer
+	// A seed is usable by uncommenting: enable it and its port line, and it
+	// checks ok.
+	seed := filepath.Join(root, "devices.d", "sim-focuser.json")
+	var sb strings.Builder
+	drv, _ := registry.Lookup("sim-focuser")
+	if err := devicemain.WriteCommentedDeviceFile(&sb, drv, 11250); err != nil {
+		t.Fatal(err)
+	}
+	txt := strings.Replace(sb.String(), `"enable": false`, `"enable": true`, 1)
+	txt = strings.Replace(txt, `// "port": 11250,`, `"port": 11250,`, 1)
+	if err := os.WriteFile(seed, []byte(txt), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig(path)
+	if err != nil {
+		t.Fatalf("uncommented seed does not load: %v", err)
+	}
+	out.Reset()
+	if errs := checkConfig(&out, cfg); errs != 0 || !strings.Contains(out.String(), "focuser/0 on port 11250") {
+		t.Errorf("uncommented seed should check ok on port 11250:\n%s", out.String())
+	}
+	out.Reset()
 	if errs := checkConfig(&out, cfg); errs != 0 {
 		t.Fatalf("checkConfig(example) = %d error(s):\n%s", errs, out.String())
+	}
+	// A second run keeps every existing file.
+	out.Reset()
+	if err := writeExampleDevicesDir(&out, filepath.Join(root, "devices.d")); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "wrote") || !strings.Contains(out.String(), "keep") {
+		t.Errorf("re-run should keep, not overwrite:\n%s", out.String())
 	}
 }
 

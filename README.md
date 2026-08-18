@@ -1,10 +1,11 @@
 # alpacahurd
 
-A herd of open source [ASCOM Alpaca](https://ascom-standards.org/) astronomy 
-device drivers in **one static binary, one config file**, built for the
-low power mini pc at the telescope. Configure it your hardware once, and NINA, 
-PHD2, Stellarium, or any other Alpaca client discovers every device over the 
-network. Hotplug is handled automatically.
+A herd of open source [ASCOM Alpaca](https://ascom-standards.org/) astronomy
+device drivers, built for the low power mini pc at the telescope. Drivers run
+compiled into one static binary or as separate binaries under the platform
+supervisor; both layouts are supported and may be mixed. Configure your
+hardware once, and NINA, PHD2, Stellarium, or any other Alpaca client discovers
+every device over the network. Hotplug is handled automatically.
 
 - **Typed, standard interfaces.** Every device is a standard ASCOM device with 
   the standard members. Clients need no per-vendor code.
@@ -12,12 +13,16 @@ network. Hotplug is handled automatically.
   acquire/monitor/re-acquire loop: start the herd on an empty bus, plug things
   in whenever, unplug one without disturbing the rest.
 - **One discovery responder.** Clients auto-discover every device via UDP 32227
-  (IPv4 broadcast + IPv6 multicast).
+  (IPv4 broadcast + IPv6 multicast). Devices running as separate binaries, on
+  this host or another, register with it and are discovered through it too.
 - **LX200 front-end included.** Each mount object can serve a Meade-LX200 over
   TCP for Stellarium and SkySafari.
-- **Open-source drivers, chosen at build time.** `hurd.conf` lists the driver
-  packages compiled in; anyone can publish a driver module (see
-  [DRIVERS.md](DRIVERS.md)).
+- **Browser setup pages.** Every device has a configuration page at
+  `/setup/v1/{type}/{n}/setup`, generated from the driver's config struct.
+  Keys the config file names render locked; what the page changes persists to
+  a state file and survives restart.
+- **Open-source drivers.** `hurd.conf` lists the driver packages compiled in;
+  anyone can publish a driver module (see [DRIVERS.md](DRIVERS.md)).
 
 ## Platforms
 
@@ -146,43 +151,90 @@ is not WinUSB-compatible).
 
 ## Configure devices
 
-Which devices run is declared in a JSON config. Pass `-config <path>`
-explicitly, or let it search (first found wins): `./hurd.json`, then
-`~/.config/alpacahurd/hurd.json`, then `/etc/alpacahurd/hurd.json` (the
-install target; the systemd unit passes it explicitly). `$ALPACAHURD_CONFIG`
-overrides the search.
+Which devices run is declared in JSON. The server config `hurd.json` holds the
+shared blocks (`discovery`, `listen`, `indi`, `lx200`), and a `devices.d`
+directory beside it holds one file per device. Pass `-config <path>`
+explicitly, or let it search (first found wins): `./hurd.json`, then the
+platform config directory (`~/.config/alpacahurd` for a user,
+`/etc/alpacahurd` under the service on Linux; see the table below).
+`$ALPACAHURD_CONFIG` overrides the search.
 
-```json
-{
-  "discovery": "direct",
-  "devices": [
-    { "driver": "tenmicron", "port": 11110, "addr": "10.0.1.51:3492", "aperture": 200, "focalLength": 1600 },
-    { "driver": "astrocam",  "port": 11111, "serial": "1a2b3c4d", "name": "Main camera" },
-    { "driver": "oasisfoc",  "port": 11120, "index": 0 },
-    { "driver": "oasisfw",   "port": 11123, "index": 0, "enable": false }
-  ]
-}
+```
+/etc/alpacahurd/hurd.json                  server blocks
+/etc/alpacahurd/devices.d/main-camera.json one device
+/etc/alpacahurd/devices.d/mount.json       another
 ```
 
-Each entry is one device on an Alpaca `"port"` (required), registered as device
-number 0 of its type there. `"enable": false` turns an entry off without deleting
-it. Bind by `serial` or `addr` or by its discovery `index` depending on the driver.
+A device file is one JSON object. The filename is the device's identity and
+names its state file:
+
+```json
+{ "driver": "astrocam", "port": 11111, "device": 0, "serial": "1a2b3c4d", "name": "Main camera" }
+```
+
+Every entry is one device on an Alpaca `"port"` (required). `"enable": false`
+turns an entry off without deleting it. Bind by `serial` or `addr` or by its
+discovery `index` depending on the driver.
+
+Pin `serial`, `port`, and `device`. Those three fix a client's connect string:
+`serial` selects the hardware whatever the enumeration order, `port` the
+address, and `device` the number within that port. Left unpinned, a replug or a
+disabled entry can move a device.
+
+The inline `"devices"` array in `hurd.json` still works and is loaded first;
+`devices.d` is the newer layout and the one the install scripts seed.
+
+### The setup page and the state directory
+
+Each device has a browser configuration page at
+`/setup/v1/{type}/{number}/setup`, generated from the driver's config struct.
+Every key the device file names renders locked there, with the file named; the
+page changes only what the file left unset. What the page changes is written to
+a state file of the same name under the state directory, and read back over the
+device file at the next start. The admin file always wins, with one
+exception: `enable`, which the orchestrator page's enable and disable buttons
+write to the state file, wins from there, since the seeded file's `enable:
+false` is the installer's default rather than a decision.
+
+| role | Linux | macOS | Windows |
+|---|---|---|---|
+| config | `/etc/alpacahurd/` | `/Library/Application Support/alpacahurd/` | `%ProgramData%\alpacahurd\` |
+| state | `/var/lib/alpacahurd/devices/` | `…/alpacahurd/state/devices/` | `…\alpacahurd\state\devices\` |
+| logs | journal | `/Library/Logs/alpacahurd/` | `…\alpacahurd\logs\` |
+
+An interactive run uses the per-user equivalents. `$ALPACA_CONFIG_DIR` and
+`$ALPACA_STATE_DIR` override either.
+
+### Reload without a restart
+
+A device file edit takes effect on a reload: the device is rebuilt from the
+file and its state overlay, its hardware closed and reopened, and its port
+kept, while the other devices carry on. The Reload button on a device's setup
+page and on the orchestrator page (`http://host:32227/setup`) does it per
+device; `systemctl reload alpacahurd` or `kill -HUP` does it for the whole
+herd. A port change or a driver change still needs a restart, and so does a
+mount the INDI hub or an LX200 bridge serves.
+
+Enable and disable act without a restart too, from the orchestrator page: a
+disabled entry is constructed and served on its port (a new server is started
+for a new port), an enabled one has its hardware closed and is removed from
+its port; a separate binary is started or stopped through the supervisor. The
+switch is recorded in the entry's state file, so the next start agrees. A
+device the add form writes appears in the table at once, disabled; its `edit`
+link opens the device file itself in the page (JSON with comments, checked
+before it is written), so the keys it needs are set there and the row enabled,
+all without leaving the browser. A running device picks up an edit on reload.
 
 ### Several devices on one port
 
 Entries naming the same `"port"` share one Alpaca server and are numbered 0, 1, …
 in config order. Numbering is per ASCOM type, since the URL is
-`/api/v1/{type}/{number}/` — two cameras on a port are `camera/0` and `camera/1`,
-and a focuser beside them is still `focuser/0`:
-
-```json
-{ "driver": "astrocam", "port": 11201, "serial": "1a2b3c4d", "name": "Main camera"  },
-{ "driver": "astrocam", "port": 11201, "serial": "5e6f7a8b", "name": "Guide camera" }
-```
+`/api/v1/{type}/{number}/`: two cameras on a port are `camera/0` and `camera/1`,
+and a focuser beside them is still `focuser/0`.
 
 Separate ports remain the default, and are the better layout for anything you
 restart or replug independently. Reach for a shared port when a client shows only
-one server per address — ZWO's ASIStudio lists a single Alpaca entry per IP, so
+one server per address. ZWO's ASIStudio lists a single Alpaca entry per IP, so
 two cameras must share a port for it to offer both.
 
 Pin a number with `"device": N` once clients have stored device URLs; otherwise
@@ -190,17 +242,25 @@ disabling an entry renumbers the ones after it. Pinning a number an earlier entr
 already took is a config error rather than a silent reshuffle, so pin ascending or
 pin none. `alpacahurd -check` prints the resolved `type/number` for every device.
 
+A `devices.d` file naming a driver that is not compiled in is reported by
+`-check` and skipped at start rather than treated as fatal, since removing a
+driver package can leave its file behind.
+
 The binary documents itself:
 
 ```sh
-alpacahurd -drivers            # list the drivers compiled into this binary
-alpacahurd -example            # print a full starter config (all drivers, disabled)
-alpacahurd -example astrocam   # print one driver's entry
-alpacahurd -check              # validate the config without touching hardware
+alpacahurd -drivers                        # list the drivers compiled into this binary
+alpacahurd -example                        # print the server config (no devices)
+alpacahurd -example astrocam               # print one driver's device file
+alpacahurd -example-devices /etc/alpacahurd/devices.d   # seed one disabled file per driver
+alpacahurd -check                          # validate the config without touching hardware
 ```
 
-An example config (LX200, optics, weather→mount feed) is in
-[`config/hurd.example.json`](config/hurd.example.json).
+An example server config (LX200, optics, weather to mount feed) is in
+[`config/hurd.example.json`](config/hurd.example.json). Device files are not
+kept here: each driver carries its own example and schema in goalpaca-devices,
+and `alpacahurd -example-devices <dir>` writes one commented file per compiled-in
+driver from them (`alpacahurd -example <driver>` prints one entry).
 
 ## Choosing drivers (hurd.conf)
 
@@ -211,6 +271,31 @@ file. To pin a driver to a specific version: `go get <module>@<version>`.
 
 Drivers register themselves with `goalpaca/registry` at init. Writing one is a
 small amount of glue over a hardware library; see [DRIVERS.md](DRIVERS.md).
+
+## Drivers as separate binaries
+
+A driver need not be compiled in. A `devices.d` entry whose driver is not in
+the binary resolves to an installed one: the entry's `"exec"` path, a binary
+named for the driver beside `alpacahurd`, or one on `PATH`. The orchestrator
+runs it through the platform supervisor as `alpacahurd -launch <instance>`,
+which resolves the entry and replaces itself with the driver binary in
+register discovery mode, so the orchestrator answers discovery for it and the
+supervisor's record never names the driver:
+
+- Linux: the template unit `alpacahurd-device@.service` (installed by
+  `install.sh`), one instance per device file, `PartOf=alpacahurd.service`,
+  restart on failure, `journalctl -u alpacahurd-device@<instance>` for logs.
+- macOS: one plist per device under `/Library/LaunchDaemons`, written by the
+  orchestrator, `KeepAlive` on failure, logs in `/Library/Logs/alpacahurd/`.
+- Windows: one service per device (`alpacahurd-<instance>`) with recovery
+  options; the launched `alpacahurd` stays as the service host and runs the
+  driver as its child, logs under `%ProgramData%\alpacahurd\logs\`.
+
+The orchestrator page starts, stops, restarts, enables, disables, and shows the
+logs of each; a compiled-in driver always wins over a binary of the same name,
+so a driver moves out of process by leaving `hurd.conf`. Without a supervisor
+(a hand run, or a platform without one) such entries are reported and skipped;
+`alpacahurd -launch <instance>` runs one from a console.
 
 ## LX200 front-end (Stellarium, SkySafari)
 

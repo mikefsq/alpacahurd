@@ -11,6 +11,9 @@ Type=simple
 # journal message instead of a crash loop.
 ExecStartPre=/usr/local/bin/alpacahurd -check -config /etc/alpacahurd/hurd.json
 ExecStart=/usr/local/bin/alpacahurd -config /etc/alpacahurd/hurd.json
+# systemctl reload: every device re-reads its file and reopens its hardware,
+# ports kept. A port change or a new device is a restart.
+ExecReload=/bin/kill -HUP $MAINPID
 # Restart if the process exits non-zero (e.g. a device goroutine panics — the
 # whole herd shares one process, so systemd is the recovery net).
 Restart=on-failure
@@ -25,6 +28,14 @@ RestartSec=5
 #   User=alpacahurd
 #   SupplementaryGroups=dialout plugdev
 User=root
+
+# Writable state: what the setup pages change, one file per device under
+# devices/. systemd creates /var/lib/alpacahurd owned by the service user and
+# exports $STATE_DIRECTORY, which the program reads first.
+StateDirectory=alpacahurd
+# Admin config lives under /etc/alpacahurd (hurd.json and devices.d/); the
+# program reads $CONFIGURATION_DIRECTORY when set, so this pins the location.
+ConfigurationDirectory=alpacahurd
 
 # Alpaca HTTP serves on each device's config "port"; discovery answers UDP 32227.
 

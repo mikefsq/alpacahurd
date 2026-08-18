@@ -11,8 +11,23 @@
 	<array>
 		<string>/usr/local/bin/alpacahurd</string>
 		<string>-config</string>
-		<string>/etc/alpacahurd/hurd.json</string>
+		<string>/Library/Application Support/alpacahurd/hurd.json</string>
 	</array>
+
+	<!-- launchd has no StateDirectory= analogue, so the platform paths are set
+	     explicitly (see CONFIG_PLAN.md): config and state under
+	     /Library/Application Support/alpacahurd, logs under /Library/Logs. -->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>ALPACA_SYSTEM_SERVICE</key>
+		<string>true</string>
+		<key>ALPACA_CONFIG_DIR</key>
+		<string>/Library/Application Support/alpacahurd</string>
+		<key>ALPACA_STATE_DIR</key>
+		<string>/Library/Application Support/alpacahurd/state</string>
+		<key>ALPACA_LOG_DIR</key>
+		<string>/Library/Logs/alpacahurd</string>
+	</dict>
 
 	<!-- Start at boot; restart only after a failure (systemd Restart=on-failure). -->
 	<key>RunAtLoad</key>
@@ -27,8 +42,8 @@
 
 	<!-- Everything logs to stderr; launchd lands it here. -->
 	<key>StandardOutPath</key>
-	<string>/var/log/alpacahurd.log</string>
+	<string>/Library/Logs/alpacahurd/alpacahurd.log</string>
 	<key>StandardErrorPath</key>
-	<string>/var/log/alpacahurd.log</string>
+	<string>/Library/Logs/alpacahurd/alpacahurd.log</string>
 </dict>
 </plist>

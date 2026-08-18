@@ -41,6 +41,6 @@ require (
 	github.com/mikefsq/pegasus-astro v0.0.0-20260610070031-afd43eb66e1d // indirect
 	github.com/mikefsq/unihedron v0.1.0 // indirect
 	go.bug.st/serial v1.7.1 // indirect
-	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/sys v0.43.0
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

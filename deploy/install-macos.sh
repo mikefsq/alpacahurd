@@ -10,8 +10,13 @@ set -euo pipefail
 
 BIN_SRC="${1:-./alpacahurd}"
 BIN_DST=/usr/local/bin/alpacahurd
-CONF_DIR=/etc/alpacahurd
+# Platform paths (see CONFIG_PLAN.md): config and state under
+# /Library/Application Support/alpacahurd, logs under /Library/Logs.
+CONF_DIR="/Library/Application Support/alpacahurd"
 CONF_DST="$CONF_DIR/hurd.json"
+DEVICES_DIR="$CONF_DIR/devices.d"
+STATE_DIR="$CONF_DIR/state"
+LOG_DIR=/Library/Logs/alpacahurd
 LABEL=com.mikefsq.alpacahurd
 PLIST_DST="/Library/LaunchDaemons/$LABEL.plist"
 HERE="$(cd "$(dirname "$0")/.." && pwd)" # repo root
@@ -28,16 +33,19 @@ fi
 echo "installing binary -> $BIN_DST"
 install -m 0755 "$BIN_SRC" "$BIN_DST"
 
-mkdir -p "$CONF_DIR"
+mkdir -p "$CONF_DIR" "$STATE_DIR/devices" "$LOG_DIR"
 if [[ -f "$CONF_DST" ]]; then
 	echo "keeping existing config $CONF_DST"
 else
-	# Seed a starter config from the binary itself: every compiled-in driver,
-	# disabled. Enable yours, fill in serials/addresses, and restart.
+	# Seed the server config: discovery, INDI, LX200 blocks and no inline devices.
 	"$BIN_DST" -example >"$CONF_DST"
 	chmod 0644 "$CONF_DST"
-	echo "installed starter config -> $CONF_DST   *** EDIT THIS for your hardware ***"
+	echo "installed server config -> $CONF_DST"
 fi
+# Seed one disabled device file per compiled-in driver beside it; existing
+# files are kept. Enable the ones you have, fill in serials/addresses, restart.
+"$BIN_DST" -example-devices "$DEVICES_DIR"
+echo "device files -> $DEVICES_DIR/   *** EDIT THESE for your hardware ***"
 
 echo "installing launchd unit -> $PLIST_DST"
 launchctl bootout system "$PLIST_DST" 2>/dev/null || true

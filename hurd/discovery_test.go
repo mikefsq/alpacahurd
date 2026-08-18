@@ -21,7 +21,7 @@ func TestDiscoveryIPv6RoundTrip(t *testing.T) {
 	defer cancel()
 
 	const advertised = 41999
-	if err := runDiscovery(ctx, []int{advertised}, true, nil); err != nil {
+	if err := runDiscovery(ctx, newResponder([]int{advertised}, nil), true, nil); err != nil {
 		t.Fatalf("runDiscovery: %v", err)
 	}
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/mikefsq/goalpaca/registry"
+	alpacadev "github.com/mikefsq/goalpaca/server"
 )
 
 func TestResolveConfigPath(t *testing.T) {
@@ -38,19 +39,22 @@ func TestResolveConfigPath(t *testing.T) {
 }
 
 func TestResolveConfigPathNotFound(t *testing.T) {
-	// A deployed box may actually have /etc/alpacahurd/hurd.json, which would
-	// legitimately be found — skip the not-found assertion there.
-	if _, err := os.Stat("/etc/alpacahurd/hurd.json"); err == nil {
-		t.Skip("/etc/alpacahurd/hurd.json exists on this host")
+	// A deployed box may hold the service's config, which would legitimately be
+	// found; skip the not-found assertion there.
+	sys := filepath.Join(alpacadev.SystemConfigDir(serverName), "hurd.json")
+	if _, err := os.Stat(sys); err == nil {
+		t.Skipf("%s exists on this host", sys)
 	}
 	t.Setenv("ALPACAHURD_CONFIG", "")
-	chdir(t, t.TempDir()) // empty dir → no ./hurd.json
+	t.Setenv("ALPACA_CONFIG_DIR", "")
+	chdir(t, t.TempDir()) // empty dir: no ./hurd.json
 	_, err := resolveConfigPath("")
 	if err == nil {
 		t.Fatal("want an error when no config file exists anywhere")
 	}
-	if !strings.Contains(err.Error(), "/etc/alpacahurd/hurd.json") {
-		t.Errorf("error should list the searched paths, got: %v", err)
+	// The searched list names the platform's system-wide location.
+	if !strings.Contains(err.Error(), sys) {
+		t.Errorf("error should list %s, got: %v", sys, err)
 	}
 }
 

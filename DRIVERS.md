@@ -38,17 +38,24 @@ import (
 	alpacadev "github.com/mikefsq/goalpaca/server"
 )
 
+// Config is the entry's driver-owned keys. The json tag names the key; the
+// alpaca tag describes the setup-form control (see goalpaca-devices'
+// SETUP_FORMS.md). Both fields select the hardware, so they apply at the next
+// start and render read-only.
+type Config struct {
+	Serial string `json:"serial,omitempty" alpaca:"label=Serial,when=start"`
+	Index  int    `json:"index,omitempty"  alpaca:"label=Enumeration index,min=0,when=start"`
+}
+
 func init() {
 	registry.Register(registry.Driver{
 		Name:          "mywidget",                   // the config "driver" key
 		Type:          alpacadev.FocuserType,
 		Description:   "ACME MyWidget focuser",      // shown by alpacahurd -drivers
 		ConfigExample: `{ "driver": "mywidget", "serial": "MW0001" }`,
+		Config:        func() any { return &Config{} },
 		New: func(spec registry.Spec) (alpacadev.Device, error) {
-			var cfg struct {
-				Serial string `json:"serial,omitempty"`
-				Index  int    `json:"index,omitempty"`
-			}
+			var cfg Config
 			if err := spec.Decode(&cfg); err != nil {
 				return nil, err
 			}
@@ -66,13 +73,24 @@ The rules:
 
 - **`New` must not touch hardware.** It binds identity (serial, address,
   index), and the acquire loop connects later. `alpacahurd -check` constructs
-  every configured device, and users run it freely.
+  every configured device, and users run it freely. A reload constructs it
+  again while the previous instance is being closed, so `Open` and `Close`
+  (the `server.Hardware` interface) have to run cleanly in sequence in one
+  process; a driver that grabs hardware in `New` cannot be reloaded.
 - **The driver decodes its own config strictly.** `spec.Decode` returns the
   entry with the engine-owned common keys stripped (`driver`, `name`, `enable`,
   `port`, `device`, `lx200Port`, and the optics block — the full list is
   `registry.CommonKeys()`), and rejects unknown keys so that user typos are
   reported. A driver must not name its own fields after a common key, or they
   are stripped before its decode runs.
+- **`Config` returns the driver's config struct.** The same tagged struct `New`
+  decodes into, hoisted to a named type; `Config` returns a pointer to its zero
+  value. The framework renders the driver's browser setup form from its `json`
+  and `alpaca` tags with no form code in the driver, and delivers accepted live
+  changes through the optional `Reconfigure(cfg any) error` method on the
+  device. The tag grammar and the start-time versus live distinction are in
+  goalpaca-devices' `SETUP_FORMS.md`. A driver with no driver-owned keys leaves
+  `Config` nil and gets the "no configurable settings" page.
 - **`ConfigExample` is a complete JSON entry** for the driver, without `"port"`
   (the host injects one). It is what `alpacahurd -example` prints, and it seeds
   `/etc/alpacahurd/hurd.json`, so it should be ready to copy into a config.

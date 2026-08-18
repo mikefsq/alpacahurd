@@ -3,6 +3,7 @@ package hurd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -216,5 +217,42 @@ func TestCommonKeysReachDrivers(t *testing.T) {
 		"guideRate":0.5,"index":3}`
 	if _, _, err := buildDevice(parseSpec(t, entry)); err != nil {
 		t.Fatalf("common keys leaked into the driver decode: %v", err)
+	}
+}
+
+// TestSetupFormFromRegistry: a driver that supplies a Config struct gets a
+// generated setup form through registerDevice with no form code of its own,
+// and every key the config entry names renders locked.
+func TestSetupFormFromRegistry(t *testing.T) {
+	base := serveSpec(t, `{"driver":"astrocam","serial":"deadbeef","fixdefects":true,"name":"Main"}`)
+	r, err := http.Get(base + "/setup/v1/camera/0/setup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	b, _ := io.ReadAll(r.Body)
+	body := string(b)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("setup page: %d\n%s", r.StatusCode, body)
+	}
+	for _, want := range []string{`name="serial"`, `name="fixdefects"`, `name="fpsPercent"`, "set in the config file"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("generated form missing %q", want)
+		}
+	}
+	// serial and fixdefects were named in the entry, so both are pinned; the
+	// entry left fpsPercent unset, so it is editable.
+	pinned := strings.Count(body, "set in the config file")
+	if pinned != 2 {
+		t.Errorf("expected 2 pinned fields (serial, fixdefects), found %d", pinned)
+	}
+	// A driver with no Config, and no form of its own, still gets the
+	// conformant not-configurable page.
+	base = serveSpec(t, `{"driver":"sim-focuser","name":"F"}`)
+	r, _ = http.Get(base + "/setup/v1/focuser/0/setup")
+	b, _ = io.ReadAll(r.Body)
+	r.Body.Close()
+	if !strings.Contains(string(b), "no configurable settings") {
+		t.Errorf("sim-focuser should be not-configurable:\n%s", b)
 	}
 }

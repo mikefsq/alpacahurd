@@ -27,6 +27,7 @@ endif
 # intentionally omitted.
 WS_DIRS := . \
 	../goalpaca ../lx200 ../goindi ../astrocam ../goasi \
+	../goasi/asiair ../ptp ../stellarmate \
 	../oasis-astro ../optec ../pegasus-astro ../astromi.ch ../unihedron \
 	../goalpaca-devices/tenmicron ../goalpaca-devices/asiam5 \
 	../goalpaca-devices/onstep ../goalpaca-devices/rst \
@@ -34,7 +35,9 @@ WS_DIRS := . \
 	../goalpaca-devices/oasisfoc ../goalpaca-devices/focuscube \
 	../goalpaca-devices/focuslynx ../goalpaca-devices/asiefw \
 	../goalpaca-devices/oasisfw ../goalpaca-devices/mgpbox \
-	../goalpaca-devices/unihedron ../goalpaca-devices/sim
+	../goalpaca-devices/unihedron ../goalpaca-devices/sim \
+	../goalpaca-devices/asiair ../goalpaca-devices/ptpcam \
+	../goalpaca-devices/smpro
 
 .PHONY: all help gen workspace build tidy test install uninstall clean
 

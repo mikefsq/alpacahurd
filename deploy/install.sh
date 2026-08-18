@@ -11,6 +11,8 @@ BIN_SRC="${1:-./alpacahurd}"
 BIN_DST=/usr/local/bin/alpacahurd
 CONF_DIR=/etc/alpacahurd
 CONF_DST="$CONF_DIR/hurd.json"
+DEVICES_DIR="$CONF_DIR/devices.d"
+STATE_DIR=/var/lib/alpacahurd
 UNIT_DST=/etc/systemd/system/alpacahurd.service
 RULES_DST=/etc/udev/rules.d/99-alpacahurd.rules
 HERE="$(cd "$(dirname "$0")/.." && pwd)" # repo root
@@ -31,15 +33,26 @@ mkdir -p "$CONF_DIR"
 if [[ -f "$CONF_DST" ]]; then
 	echo "keeping existing config $CONF_DST"
 else
-	# Seed a starter config from the binary itself: every compiled-in driver,
-	# disabled. Enable yours, fill in serials/addresses, and restart.
+	# Seed the server config: discovery, INDI, LX200 blocks and no inline devices.
 	"$BIN_DST" -example >"$CONF_DST"
 	chmod 0644 "$CONF_DST"
-	echo "installed starter config -> $CONF_DST   *** EDIT THIS for your hardware ***"
+	echo "installed server config -> $CONF_DST"
 fi
+# Seed one disabled device file per compiled-in driver beside it. Files that
+# already exist are kept, so a re-install never overwrites an edited entry.
+# Enable the ones you have, fill in serials/addresses, and restart.
+"$BIN_DST" -example-devices "$DEVICES_DIR"
+echo "device files -> $DEVICES_DIR/   *** EDIT THESE for your hardware ***"
+# The state directory holds what the setup pages write (one file per device,
+# under devices/). systemd creates it from StateDirectory= in the unit; make it
+# here too so a first start before daemon-reload finds it.
+mkdir -p "$STATE_DIR/devices"
 
 echo "installing unit -> $UNIT_DST"
 install -m 0644 "$HERE/deploy/alpacahurd.service" "$UNIT_DST"
+# The template unit for devices running as separate binaries; alpacahurd
+# instantiates it per device file from its orchestrator page.
+install -m 0644 "$HERE/deploy/alpacahurd-device@.service" /etc/systemd/system/alpacahurd-device@.service
 
 echo "installing udev rules -> $RULES_DST"
 install -m 0644 "$HERE/deploy/99-alpacahurd.rules" "$RULES_DST"
@@ -51,5 +64,5 @@ systemctl enable --now alpacahurd.service
 echo
 systemctl --no-pager --full status alpacahurd.service || true
 echo
-echo "done. edit $CONF_DST then: sudo systemctl restart alpacahurd"
+echo "done. edit $DEVICES_DIR/*.json then: sudo systemctl restart alpacahurd"
 echo "logs: journalctl -u alpacahurd -f"

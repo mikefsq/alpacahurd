@@ -33,6 +33,9 @@ $TaskName   = "alpacahurd"
 $InstallDir = Join-Path $env:ProgramData "alpacahurd"
 $ExeDst     = Join-Path $InstallDir $Bin
 $Config     = Join-Path $InstallDir "hurd.json"
+$DevicesDir = Join-Path $InstallDir "devices.d"
+$StateDir   = Join-Path $InstallDir "state"
+$LogDir     = Join-Path $InstallDir "logs"
 
 # Library sibling checkouts the workspace overlays. The driver modules are added
 # recursively from ..\goalpaca-devices, so only the libraries are listed here.
@@ -136,18 +139,28 @@ function Target-Install {
     if (Test-Path $Config) {
         Write-Host "keeping existing config $Config"
     } else {
-        # Seed a starter config from the binary itself (every compiled-in driver,
-        # disabled). WriteAllText emits UTF-8 with no BOM, which the JSON loader needs.
+        # Seed the server config: discovery, INDI, LX200 blocks and no inline
+        # devices. WriteAllText emits UTF-8 with no BOM, which the JSON loader needs.
         $example = (& $ExeDst -example | Out-String)
         [System.IO.File]::WriteAllText($Config, $example)
-        Write-Host "installed starter config -> $Config   *** EDIT THIS for your hardware ***"
+        Write-Host "installed server config -> $Config"
     }
+    # One disabled device file per compiled-in driver beside it; existing files
+    # are kept. Enable the ones you have, fill in serials/addresses, restart.
+    Invoke-Native $ExeDst @("-example-devices", $DevicesDir)
+    Write-Host "device files -> $DevicesDir\   *** EDIT THESE for your hardware ***"
+    # State (what the setup pages write) and logs, per the platform table in
+    # CONFIG_PLAN.md: %ProgramData%\alpacahurd\state and \logs.
+    New-Item -ItemType Directory -Force -Path (Join-Path $StateDir "devices"), $LogDir | Out-Null
 
     # Validate the config before registering the task (the ExecStartPre equivalent).
     Invoke-Native $ExeDst @("-check", "-config", $Config)
 
     # Startup task as SYSTEM, restart on failure, no run-time limit: the Windows
     # analogue of the systemd service / launchd daemon.
+    # No root heuristic exists on Windows, so tell the program it is a service;
+    # the platform paths then resolve to %ProgramData%\alpacahurd by default.
+    [Environment]::SetEnvironmentVariable("ALPACA_SYSTEM_SERVICE", "true", "Machine")
     $action    = New-ScheduledTaskAction -Execute $ExeDst -Argument "-config `"$Config`""
     $trigger   = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
