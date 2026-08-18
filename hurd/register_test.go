@@ -60,7 +60,7 @@ func TestRegistryDriversServe(t *testing.T) {
 		{`{"driver":"asiam5","serial":"A"}`, "telescope"},
 		{`{"driver":"onstep","addr":"127.0.0.1:1"}`, "telescope"},
 		{`{"driver":"rst"}`, "telescope"},
-		{`{"driver":"asicam","serial":"deadbeef"}`, "camera"},
+		{`{"driver":"astrocam","serial":"deadbeef"}`, "camera"},
 		{`{"driver":"asieaf","index":0}`, "focuser"},
 		{`{"driver":"oasisfoc","index":0}`, "focuser"},
 		{`{"driver":"focuscube","serial":"FT1ABCDE","maxstep":120000}`, "focuser"},
@@ -88,7 +88,7 @@ func TestRegistryDriversServe(t *testing.T) {
 // for every driver, hardware and sim alike.
 func TestSpecNameOverride(t *testing.T) {
 	for _, entry := range []string{
-		`{"driver":"asicam","serial":"x","name":"My Cam"}`,
+		`{"driver":"astrocam","serial":"x","name":"My Cam"}`,
 		`{"driver":"sim-focuser","name":"My Cam"}`,
 	} {
 		devs := configured(t, serveSpec(t, entry))

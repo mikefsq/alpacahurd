@@ -6,6 +6,7 @@
 package main
 
 import (
+	_ "github.com/mikefsq/goalpaca-devices/asiair"
 	_ "github.com/mikefsq/goalpaca-devices/asiam5"
 	_ "github.com/mikefsq/goalpaca-devices/asieaf"
 	_ "github.com/mikefsq/goalpaca-devices/asiefw"
@@ -16,8 +17,10 @@ import (
 	_ "github.com/mikefsq/goalpaca-devices/oasisfoc"
 	_ "github.com/mikefsq/goalpaca-devices/oasisfw"
 	_ "github.com/mikefsq/goalpaca-devices/onstep"
+	_ "github.com/mikefsq/goalpaca-devices/ptpcam"
 	_ "github.com/mikefsq/goalpaca-devices/rst"
 	_ "github.com/mikefsq/goalpaca-devices/sim"
+	_ "github.com/mikefsq/goalpaca-devices/smpro"
 	_ "github.com/mikefsq/goalpaca-devices/tenmicron"
 	_ "github.com/mikefsq/goalpaca-devices/unihedron"
 )

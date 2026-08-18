@@ -9,8 +9,8 @@
       "guiderAperture": 60, "guiderFocalLength": 240,
       "guideRate": 0.5 },
 
-    { "driver": "asicam", "port": 11111, "serial": "1a2b3c4d", "name": "Main camera", "fixdefects": true },
-    { "driver": "asicam", "port": 11112, "serial": "5e6f7a8b", "name": "Guide camera", "fixdefects": true },
+    { "driver": "astrocam", "port": 11111, "serial": "1a2b3c4d", "name": "Main camera", "fixdefects": true },
+    { "driver": "astrocam", "port": 11112, "serial": "5e6f7a8b", "name": "Guide camera", "fixdefects": true },
 
     { "driver": "oasisfoc", "port": 11120, "index": 0 },
 

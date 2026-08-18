@@ -18,7 +18,7 @@ func buildDevice(spec DeviceSpec) (registry.Driver, alpacadev.Device, error) {
 		case "asiccd", "asicaa":
 			// The ZWO-SDK (cgo) devices are deliberately not part of the vendor-free herd.
 			return registry.Driver{}, nil, fmt.Errorf("%q needs the ZWO SDK (cgo) and is not built into alpacahurd; "+
-				"run its standalone cmd, or use the Go \"asicam\" driver for ZWO cameras", spec.Driver)
+				"run its standalone cmd, or use the Go \"astrocam\" driver for ZWO cameras", spec.Driver)
 		}
 		return registry.Driver{}, nil, fmt.Errorf("unknown driver %q — not compiled into this binary "+
 			"(alpacahurd -drivers lists what is; add its module to hurd.conf and rebuild)", spec.Driver)

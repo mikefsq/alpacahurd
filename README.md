@@ -157,7 +157,7 @@ overrides the search.
   "discovery": "direct",
   "devices": [
     { "driver": "tenmicron", "port": 11110, "addr": "10.0.1.51:3492", "aperture": 200, "focalLength": 1600 },
-    { "driver": "asicam",    "port": 11111, "serial": "1a2b3c4d", "name": "Main camera" },
+    { "driver": "astrocam",  "port": 11111, "serial": "1a2b3c4d", "name": "Main camera" },
     { "driver": "oasisfoc",  "port": 11120, "index": 0 },
     { "driver": "oasisfw",   "port": 11123, "index": 0, "enable": false }
   ]
@@ -174,7 +174,7 @@ The binary documents itself:
 ```sh
 alpacahurd -drivers            # list the drivers compiled into this binary
 alpacahurd -example            # print a full starter config (all drivers, disabled)
-alpacahurd -example asicam     # print one driver's entry
+alpacahurd -example astrocam     # print one driver's entry
 alpacahurd -check              # validate the config without touching hardware
 ```
 

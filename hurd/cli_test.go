@@ -48,10 +48,10 @@ func TestExampleConfigIsUsable(t *testing.T) {
 // TestSingleDriverExample: the per-driver form prints that driver's entry.
 func TestSingleDriverExample(t *testing.T) {
 	var buf bytes.Buffer
-	if err := printExample(&buf, "asicam"); err != nil {
+	if err := printExample(&buf, "astrocam"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), `"driver": "asicam"`) || !strings.Contains(buf.String(), `"port"`) {
+	if !strings.Contains(buf.String(), `"driver": "astrocam"`) || !strings.Contains(buf.String(), `"port"`) {
 		t.Fatalf("unexpected single-driver example: %s", buf.String())
 	}
 	if err := printExample(&buf, "not-a-driver"); err == nil {

@@ -57,7 +57,7 @@ func Main() {
 		"list the drivers compiled into this binary and exit")
 	example := flag.Bool("example", false,
 		"print a starter device config assembled from every compiled-in driver and exit; "+
-			"name a driver as an argument (alpacahurd -example asicam) for just its entry")
+			"name a driver as an argument (alpacahurd -example astrocam) for just its entry")
 	check := flag.Bool("check", false,
 		"load the config and construct every enabled device (no hardware is touched), "+
 			"report problems, and exit non-zero on any error")
