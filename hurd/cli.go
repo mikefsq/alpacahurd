@@ -102,7 +102,9 @@ func checkConfig(w io.Writer, cfg *Config) int {
 		errs++
 	}
 
-	ports := map[int]string{}      // port -> driver, for duplicate detection
+	// Device numbers are per port, assigned exactly as serve does, so -check
+	// reports the addresses the hurd will actually serve.
+	nums := map[int]*deviceNumbers{}
 	indiNames := map[string]bool{} // INDI ids must be unique on the hub
 	enabled := 0
 	for _, spec := range cfg.Devices {
@@ -113,13 +115,17 @@ func checkConfig(w io.Writer, cfg *Config) int {
 		enabled++
 		if spec.Port == 0 {
 			fail(spec, `"port" is required`)
-		} else if prev, dup := ports[spec.Port]; dup {
-			fail(spec, "port %d already used by %s", spec.Port, prev)
-		} else {
-			ports[spec.Port] = spec.Driver
 		}
 
 		drv, dev, err := buildDevice(spec)
+		if err != nil {
+			fail(spec, "%v", err)
+			continue
+		}
+		if nums[spec.Port] == nil {
+			nums[spec.Port] = &deviceNumbers{}
+		}
+		num, err := nums[spec.Port].assign(spec, drv.Type)
 		if err != nil {
 			fail(spec, "%v", err)
 			continue
@@ -131,14 +137,14 @@ func checkConfig(w io.Writer, cfg *Config) int {
 		if spec.indiEnabled() {
 			if !isLiveMounter(dev) && !isLiveCamera(dev) {
 				fmt.Fprintf(w, "warn   %-22s \"indi\": true but the device is not INDI-capable (ignored)\n", spec.Driver)
-			} else if name := indiName(spec); indiNames[name] {
+			} else if name := indiName(spec, num); indiNames[name] {
 				fail(spec, "INDI name %q is already taken (INDI ids must be unique; set \"name\")", name)
 			} else {
 				indiNames[name] = true
 			}
 		}
 
-		fmt.Fprintf(w, "ok     %-22s %s/0 on port %d  %q\n", spec.Driver, drv.Type, spec.Port, dev.Name())
+		fmt.Fprintf(w, "ok     %-22s %s/%d on port %d  %q\n", spec.Driver, drv.Type, num, spec.Port, dev.Name())
 	}
 
 	if enabled == 0 {

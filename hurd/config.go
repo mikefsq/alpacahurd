@@ -95,7 +95,8 @@ func (c *Config) ipv6Enabled() bool { return c.IPv6 == nil || *c.IPv6 }
 //
 // Each device gets its own acquire/monitor/re-acquire goroutine, so it is
 // picked up whenever its hardware appears and survives unplug/replug
-// independently of the others.
+// independently of the others. That holds however entries are spread over
+// ports: sharing a port shares only the HTTP server.
 type DeviceSpec struct {
 	deviceCommon
 
@@ -112,8 +113,17 @@ type deviceCommon struct {
 	// field, omitted means enabled); set "enable": false to skip it at startup.
 	Enable *bool `json:"enable,omitempty"`
 
-	// Port is this device's own Alpaca HTTP port. Required for enabled devices.
+	// Port is this device's Alpaca HTTP port. Required for enabled devices.
+	// Entries that name the same port share one Alpaca server, appearing on it as
+	// device 0, 1, … of their ASCOM type — the layout a client needs to see two
+	// cameras under one address.
 	Port int `json:"port,omitempty"`
+
+	// Device pins this entry's ASCOM device number within its port. Omitted
+	// numbers are assigned in config order, lowest free number per type, so a lone
+	// device on a port is always 0. Pin them once clients have stored device URLs:
+	// otherwise disabling one entry renumbers the ones after it.
+	Device *int `json:"device,omitempty"`
 
 	// Indi opts a device into the shared INDI hub (default out, Alpaca-only). Set
 	// "indi": true to expose it over INDI.

@@ -2,6 +2,7 @@ package hurd
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,21 +18,31 @@ type cfgDev struct {
 	UniqueID     string
 }
 
-// serveSpec registers one config entry on a fresh server (the production model:
-// one device per per-port server) and returns the live base URL. Registration
-// does not open hardware (that happens in srv.Run, which we don't call), so this
+// serveSpecs registers config entries on one fresh server, as serve does for
+// entries sharing a port, and returns the live base URL. Registration does not
+// open hardware (that happens in srv.Run, which we don't call), so this
 // exercises construction + dispatch without any devices attached.
-func serveSpec(t *testing.T, entry string) string {
+func serveSpecs(t *testing.T, entries ...string) string {
 	t.Helper()
 	srv := alpacadev.New(alpacadev.Config{
 		Discovery: alpacadev.DiscoveryConfig{Mode: alpacadev.DiscoveryOff}, ServerName: "t", Manufacturer: "t",
 	})
-	if _, err := registerDevice(srv, parseSpec(t, entry)); err != nil {
-		t.Fatalf("registerDevice(%s): %v", entry, err)
+	nums := &deviceNumbers{}
+	for _, entry := range entries {
+		if _, _, err := registerDevice(srv, parseSpec(t, entry), nums); err != nil {
+			t.Fatalf("registerDevice(%s): %v", entry, err)
+		}
 	}
 	ts := httptest.NewServer(http.HandlerFunc(srv.ServeHTTP))
 	t.Cleanup(ts.Close)
 	return ts.URL
+}
+
+// serveSpec is serveSpecs for the single-device case (the common one device per
+// port layout).
+func serveSpec(t *testing.T, entry string) string {
+	t.Helper()
+	return serveSpecs(t, entry)
 }
 
 func configured(t *testing.T, base string) []cfgDev {
@@ -81,6 +92,81 @@ func TestRegistryDriversServe(t *testing.T) {
 		if devs[0].UniqueID == "" {
 			t.Errorf("%s: empty UniqueID", c.entry)
 		}
+	}
+}
+
+// TestSharedPortNumbersDevices: entries naming the same port land on one server
+// as device 0, 1, … of their type — the layout a client that shows one Alpaca
+// server per address (ZWO's ASIStudio) needs to see two cameras at once.
+// Numbering is per ASCOM type, so a focuser alongside them is still device 0.
+func TestSharedPortNumbersDevices(t *testing.T) {
+	base := serveSpecs(t,
+		`{"driver":"astrocam","serial":"aaaa","name":"Main"}`,
+		`{"driver":"astrocam","serial":"bbbb","name":"Guide"}`,
+		`{"driver":"asieaf","index":0,"name":"Focus"}`,
+	)
+	want := []cfgDev{
+		{DeviceName: "Main", DeviceType: "camera", DeviceNumber: 0},
+		{DeviceName: "Guide", DeviceType: "camera", DeviceNumber: 1},
+		{DeviceName: "Focus", DeviceType: "focuser", DeviceNumber: 0},
+	}
+	devs := configured(t, base)
+	if len(devs) != len(want) {
+		t.Fatalf("got %d devices, want %d: %+v", len(devs), len(want), devs)
+	}
+	for i, w := range want {
+		if devs[i].DeviceName != w.DeviceName || devs[i].DeviceType != w.DeviceType ||
+			devs[i].DeviceNumber != w.DeviceNumber {
+			t.Errorf("device %d = %+v, want %s %s/%d", i, devs[i], w.DeviceName, w.DeviceType, w.DeviceNumber)
+		}
+	}
+	// Both cameras answer on their own URL, so the numbering is real dispatch and
+	// not just a management listing.
+	for i, name := range []string{"Main", "Guide"} {
+		r, err := http.Get(fmt.Sprintf("%s/api/v1/camera/%d/name", base, i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Value       string
+			ErrorNumber int
+		}
+		err = json.NewDecoder(r.Body).Decode(&out)
+		r.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.ErrorNumber != 0 || out.Value != name {
+			t.Errorf("camera/%d name = %q (err %#x), want %q", i, out.Value, out.ErrorNumber, name)
+		}
+	}
+}
+
+// TestSharedPortPinnedNumbers: "device" pins a number, so disabling or reordering
+// entries cannot renumber a device out from under a client that stored its URL.
+func TestSharedPortPinnedNumbers(t *testing.T) {
+	devs := configured(t, serveSpecs(t,
+		`{"driver":"astrocam","serial":"aaaa","name":"Main","device":3}`,
+		`{"driver":"astrocam","serial":"bbbb","name":"Guide"}`,
+	))
+	if len(devs) != 2 || devs[0].DeviceNumber != 3 || devs[1].DeviceNumber != 0 {
+		t.Fatalf("got %+v, want pinned camera/3 and camera/0", devs)
+	}
+}
+
+// TestSharedPortNumberCollision: a pinned number an earlier entry already took is
+// an error, not a silent reshuffle.
+func TestSharedPortNumberCollision(t *testing.T) {
+	nums := &deviceNumbers{}
+	srv := alpacadev.New(alpacadev.Config{
+		Discovery: alpacadev.DiscoveryConfig{Mode: alpacadev.DiscoveryOff}, ServerName: "t", Manufacturer: "t",
+	})
+	if _, _, err := registerDevice(srv, parseSpec(t, `{"driver":"astrocam","serial":"a","port":1}`), nums); err != nil {
+		t.Fatalf("first camera: %v", err)
+	}
+	_, _, err := registerDevice(srv, parseSpec(t, `{"driver":"astrocam","serial":"b","port":1,"device":0}`), nums)
+	if err == nil || !strings.Contains(err.Error(), "already taken") {
+		t.Fatalf("err = %v, want an already-taken error", err)
 	}
 }
 

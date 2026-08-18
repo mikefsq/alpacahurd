@@ -43,6 +43,7 @@ type opticsConfigurable interface {
 type built struct {
 	spec   DeviceSpec
 	dev    alpacadev.Device
+	num    int           // ASCOM device number on its port
 	optics *opticsHolder // shared optics holder, when the driver accepts one
 }
 
@@ -115,6 +116,11 @@ func serve(cfg *Config, cfgPath string) {
 	var servers []*alpacadev.Server
 	var ports []int
 	var devices []built
+	// One Alpaca server per distinct port, shared by every entry naming it, with
+	// device numbers handed out per port (deviceNumbers). A port to itself is the
+	// common case and still yields device 0.
+	byPort := map[int]*alpacadev.Server{}
+	nums := map[int]*deviceNumbers{}
 	for _, spec := range cfg.Devices {
 		if !spec.enabled() {
 			log.Printf("alpacahurd: skipping %s (disabled)", spec.Driver)
@@ -123,22 +129,27 @@ func serve(cfg *Config, cfgPath string) {
 		if spec.Port == 0 {
 			log.Fatalf("alpacahurd: device %q: \"port\" is required", spec.Driver)
 		}
-		srv := alpacadev.New(alpacadev.Config{
-			AlpacaPort:          spec.Port,
-			Hosts:               listenAddrs,
-			Discovery:           alpacadev.DiscoveryConfig{Mode: alpacadev.DiscoveryOff},
-			ServerName:          "alpacahurd",
-			Manufacturer:        "mikefsq",
-			ManufacturerVersion: version,
-			Logger:              logger,
-		})
-		// Each device gets its own per-port Alpaca server, so ASCOM device numbers
-		// are per-server: every device is number 0 of its type on its port.
-		dev, err := registerDevice(srv, spec)
+		srv, shared := byPort[spec.Port]
+		if !shared {
+			srv = alpacadev.New(alpacadev.Config{
+				AlpacaPort:          spec.Port,
+				Hosts:               listenAddrs,
+				Discovery:           alpacadev.DiscoveryConfig{Mode: alpacadev.DiscoveryOff},
+				ServerName:          "alpacahurd",
+				Manufacturer:        "mikefsq",
+				ManufacturerVersion: version,
+				Logger:              logger,
+			})
+			byPort[spec.Port] = srv
+			nums[spec.Port] = &deviceNumbers{}
+			servers = append(servers, srv)
+			ports = append(ports, spec.Port) // one discovery datagram per port, not per device
+		}
+		dev, num, err := registerDevice(srv, spec, nums[spec.Port])
 		if err != nil {
 			log.Fatalf("alpacahurd: device %q: %v", spec.Driver, err)
 		}
-		b := built{spec: spec, dev: dev}
+		b := built{spec: spec, dev: dev, num: num}
 		// Inject a shared optics holder so the INDI front-end's TELESCOPE_INFO reports
 		// whatever an Alpaca setoptics Action sets.
 		if oc, ok := dev.(opticsConfigurable); ok {
@@ -146,11 +157,9 @@ func serve(cfg *Config, cfgPath string) {
 				spec.GuiderAperture, spec.GuiderFocalLength)
 			oc.UseOptics(b.optics)
 		}
-		servers = append(servers, srv)
-		ports = append(ports, spec.Port)
 		devices = append(devices, b)
 		for _, line := range listenLines(spec.Port, listenAddrs) {
-			log.Printf("alpacahurd: %s on %s", spec.Driver, line)
+			log.Printf("alpacahurd: %s on %s as device %d", spec.Driver, line, num)
 		}
 	}
 
@@ -181,7 +190,7 @@ func serve(cfg *Config, cfgPath string) {
 	for _, s := range servers {
 		go func(s *alpacadev.Server) { errc <- s.Run(ctx) }(s)
 	}
-	log.Printf("alpacahurd: serving %d device(s) (Ctrl-C to stop)", len(servers))
+	log.Printf("alpacahurd: serving %d device(s) on %d port(s) (Ctrl-C to stop)", len(devices), len(servers))
 
 	select {
 	case <-ctx.Done():
@@ -211,7 +220,7 @@ func startINDI(ctx context.Context, cfg *Config, devices []built, listenAddrs []
 		if !b.spec.indiEnabled() {
 			continue
 		}
-		name := indiName(b.spec)
+		name := indiName(b.spec, b.num)
 		var dev indiserver.Device
 		switch {
 		case isLiveMounter(b.dev):
@@ -290,11 +299,16 @@ func isLiveMounter(d alpacadev.Device) bool { _, ok := d.(liveMounter); return o
 func isLiveCamera(d alpacadev.Device) bool  { _, ok := d.(liveCamera); return ok }
 
 // indiName is the INDI device id clients select by: the configured name, or a
-// fallback derived from the driver and its Alpaca port (which is unique per
-// device). Give INDI devices an explicit "name" — that is what PHD2 shows.
-func indiName(spec DeviceSpec) string {
+// fallback derived from the driver and its Alpaca address. Device 0 is named for
+// the port alone, so sharing a port never renames an existing device; the
+// entries beside it take the device number too. Give INDI devices an explicit
+// "name" — that is what PHD2 shows.
+func indiName(spec DeviceSpec, num int) string {
 	if spec.Name != "" {
 		return spec.Name
 	}
-	return fmt.Sprintf("%s-%d", spec.Driver, spec.Port)
+	if num == 0 {
+		return fmt.Sprintf("%s-%d", spec.Driver, spec.Port)
+	}
+	return fmt.Sprintf("%s-%d-%d", spec.Driver, spec.Port, num)
 }

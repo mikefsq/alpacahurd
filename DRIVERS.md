@@ -69,7 +69,7 @@ The rules:
   every configured device, and users run it freely.
 - **The driver decodes its own config strictly.** `spec.Decode` returns the
   entry with the engine-owned common keys stripped (`driver`, `name`, `enable`,
-  `port`, `lx200Port`, and the optics block — the full list is
+  `port`, `device`, `lx200Port`, and the optics block — the full list is
   `registry.CommonKeys()`), and rejects unknown keys so that user typos are
   reported. A driver must not name its own fields after a common key, or they
   are stripped before its decode runs.

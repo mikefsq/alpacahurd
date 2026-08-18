@@ -66,22 +66,30 @@ func TestCheckConfigFindsProblems(t *testing.T) {
 		parseSpec(t, `{"driver":"sim-focuser","port":11200}`),                  // ok
 		parseSpec(t, `{"driver":"sim-focuser","enable":false}`),                // skipped (no port needed)
 		parseSpec(t, `{"driver":"sim-focuser"}`),                               // missing port
-		parseSpec(t, `{"driver":"sim-focuser","port":11200}`),                  // duplicate port
 		parseSpec(t, `{"driver":"nope","port":11201}`),                         // unknown driver
 		parseSpec(t, `{"driver":"asieaf","port":11202,"serail":"x"}`),          // driver-key typo
 		parseSpec(t, `{"driver":"sim-focuser","port":11203,"lx200Port":4040}`), // lx200Port on a non-mount
+		// Sharing a port is legal (this is focuser/1 there), but pinning a number an
+		// earlier entry already took is not.
+		parseSpec(t, `{"driver":"sim-focuser","port":11200}`),
+		parseSpec(t, `{"driver":"sim-focuser","port":11200,"device":0}`),
+		parseSpec(t, `{"driver":"sim-focuser","port":11200,"device":-1}`),
 		// Two INDI mounts falling back to the same explicit name collide on the hub.
 		parseSpec(t, `{"driver":"sim-telescope","port":11204,"name":"M","indi":true}`),
 		parseSpec(t, `{"driver":"sim-telescope","port":11205,"name":"M","indi":true}`),
 	}}
 	var out bytes.Buffer
 	errs := checkConfig(&out, cfg)
-	const want = 6 // missing port, dup port, unknown, typo, lx200Port, INDI name
+	const want = 7 // missing port, unknown, typo, lx200Port, pinned dup, negative, INDI name
 	if errs != want {
 		t.Fatalf("checkConfig = %d errors, want %d:\n%s", errs, want, out.String())
 	}
-	for _, needle := range []string{"disabled", `"port" is required`, "already used", "unknown driver",
-		"serail", "lx200Port", "already taken"} {
+	// The second entry on port 11200 is a legal device 1, not an error.
+	if !strings.Contains(out.String(), "focuser/1 on port 11200") {
+		t.Errorf("entries sharing a port should number 0,1:\n%s", out.String())
+	}
+	for _, needle := range []string{"disabled", `"port" is required`, "is already taken by another",
+		"is negative", "unknown driver", "serail", "lx200Port", "already taken"} {
 		if !strings.Contains(out.String(), needle) {
 			t.Errorf("checkConfig output missing %q:\n%s", needle, out.String())
 		}

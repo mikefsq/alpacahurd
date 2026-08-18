@@ -164,17 +164,38 @@ overrides the search.
 }
 ```
 
-Each entry is one device on its own Alpaca `"port"` (required and unique), and is
-registered as device number 0 of its type on that port. `"enable": false` turns
-an entry off without deleting it. Bind by `serial` or `addr` or by its discovery
-`index` depending on the driver. 
+Each entry is one device on an Alpaca `"port"` (required), registered as device
+number 0 of its type there. `"enable": false` turns an entry off without deleting
+it. Bind by `serial` or `addr` or by its discovery `index` depending on the driver.
+
+### Several devices on one port
+
+Entries naming the same `"port"` share one Alpaca server and are numbered 0, 1, …
+in config order. Numbering is per ASCOM type, since the URL is
+`/api/v1/{type}/{number}/` — two cameras on a port are `camera/0` and `camera/1`,
+and a focuser beside them is still `focuser/0`:
+
+```json
+{ "driver": "astrocam", "port": 11201, "serial": "1a2b3c4d", "name": "Main camera"  },
+{ "driver": "astrocam", "port": 11201, "serial": "5e6f7a8b", "name": "Guide camera" }
+```
+
+Separate ports remain the default, and are the better layout for anything you
+restart or replug independently. Reach for a shared port when a client shows only
+one server per address — ZWO's ASIStudio lists a single Alpaca entry per IP, so
+two cameras must share a port for it to offer both.
+
+Pin a number with `"device": N` once clients have stored device URLs; otherwise
+disabling an entry renumbers the ones after it. Pinning a number an earlier entry
+already took is a config error rather than a silent reshuffle, so pin ascending or
+pin none. `alpacahurd -check` prints the resolved `type/number` for every device.
 
 The binary documents itself:
 
 ```sh
 alpacahurd -drivers            # list the drivers compiled into this binary
 alpacahurd -example            # print a full starter config (all drivers, disabled)
-alpacahurd -example astrocam     # print one driver's entry
+alpacahurd -example astrocam   # print one driver's entry
 alpacahurd -check              # validate the config without touching hardware
 ```
 
