@@ -1,8 +1,8 @@
 # alpacahurd — build and install the herd. Run `make help` for the targets.
 #
 # Two ways to resolve the internal dependencies:
-#   make tidy       pins everything from the module proxy into go.mod/go.sum — no
-#                   sibling checkouts needed (the modules are published). Run once,
+#   make tidy       pins everything from the module proxy into go.mod/go.sum;
+#                   no sibling checkouts needed (the modules are published). Run once,
 #                   then `make`; committing go.mod/go.sum makes a plain clone build.
 #   make workspace  overlays a gitignored go.work on the sibling repos checked out
 #                   next to this one, tracking their local HEAD (for library dev).
@@ -58,8 +58,8 @@ gen: ## regenerate drivers_gen.go from hurd.conf
 
 # workspace (re)creates the gitignored go.work over whichever sibling checkouts
 # are present, so a fresh box resolves every internal dep to its local HEAD
-# without any module tags. Missing siblings are reported, not fatal — clone them
-# next to this repo and re-run.
+# without any module tags. Missing siblings are reported, not fatal: clone
+# them next to this repo and re-run.
 workspace: ## (re)write go.work over the present sibling checkouts
 	@rm -f go.work go.work.sum
 	@go work init
@@ -71,10 +71,10 @@ workspace: ## (re)write go.work over the present sibling checkouts
 
 # The two build flavors differ only in the fat build tag: drivers_gen.go
 # carries `//go:build fat`, so the bare build excludes it and compiles no
-# driver in — every device entry then resolves to an installed driver binary
-# under the platform supervisor. The registry-derived conveniences (-drivers,
-# -example-devices, the page's add picker) list nothing in a bare build.
-build: ## the bare orchestrator: no compiled-in drivers (separate binaries only)
+# driver in: every device entry then resolves to an installed driver binary
+# under the platform supervisor. The sim drivers are in both flavors (sim.go),
+# so a bare build's -drivers and add picker list only those.
+build: ## the bare orchestrator: sim drivers only, hardware as separate binaries
 	CGO_ENABLED=$(CGO) go build -o $(BIN) .
 
 fat: gen ## bundle the hurd.conf drivers into the binary (compiled-in layout)

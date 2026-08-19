@@ -12,8 +12,8 @@ import (
 //
 // Each entry is either an interface name or an IP literal:
 //   - An interface name (e.g. "en0", "eth0", "lo") expands to all of that interface's
-//     addresses — IPv4, IPv6 global, and IPv6 link-local (kept with its %zone).
-//   - An IP literal binds exactly that one address. A bare IPv4 literal serves IPv4
+//     addresses: IPv4, IPv6 global, and IPv6 link-local (kept with its %zone).
+//   - An IP literal binds that one address. A bare IPv4 literal serves IPv4
 //     only; name the interface instead to also serve its IPv6.
 //
 // An empty list returns (nil, nil): callers bind the wildcard ":port" (every

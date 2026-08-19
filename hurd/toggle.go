@@ -77,6 +77,12 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 			if !row.inProcess {
 				continue
 			}
+			// The front-end goes with the device: cancel its context before
+			// the registration is removed.
+			if row.stopFrontEnd != nil {
+				row.stopFrontEnd()
+				row.stopFrontEnd = nil
+			}
 			srv := o.byPort[row.srvKey]
 			if err := srv.Unregister(row.devType, row.num); err != nil {
 				return "", err
@@ -247,6 +253,9 @@ func (o *orchestrator) startInProcess(row *orchRow) (string, error) {
 	}
 	_ = srv.SetReloader(drv.Type, num, reloaderFor(spec))
 	row.reloadable = true
+	// The driver's front-end, as serve wires it: a fresh one per enable,
+	// stopped again by the disable path.
+	row.stopFrontEnd = wireFrontEnd(o.ctx, drv, srv, num, spec, o.listenAddrs)
 	row.inProcess, row.num, row.port, row.srvKey = true, num, srv.Port(), key
 	row.deviceName, row.devType = dev.Name(), drv.Type
 	persistBoundPorts([]boundEntry{{spec: spec, port: srv.Port()}})

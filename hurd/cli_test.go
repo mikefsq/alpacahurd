@@ -13,7 +13,7 @@ import (
 
 // TestExampleConfigIsUsable is the guard on every compiled-in driver's
 // ConfigExample: -example (server blocks) plus -example-devices (one disabled
-// file per hardware driver) is what install.sh seeds, and the pair must load
+// file per hardware driver) are the pair install.sh seeds, and they must load
 // and pass checkConfig with zero errors, every device disabled.
 func TestExampleConfigIsUsable(t *testing.T) {
 	t.Setenv("ALPACA_STATE_DIR", t.TempDir())
@@ -111,11 +111,11 @@ func TestSingleDriverExample(t *testing.T) {
 // rest, so a supervisor's pre-start -check must not gate startup on them.
 func TestCheckConfigFindsProblems(t *testing.T) {
 	cfg := &Config{Devices: []DeviceSpec{
-		parseSpec(t, `{"driver":"sim-focuser","port":11200}`),                  // ok
-		parseSpec(t, `{"driver":"sim-focuser","enable":false}`),                // skipped (no port needed)
-		parseSpec(t, `{"driver":"sim-focuser"}`),                               // missing port
-		parseSpec(t, `{"driver":"nope","port":11201}`),                         // unknown driver
-		parseSpec(t, `{"driver":"asieaf","port":11202,"serail":"x"}`),          // driver-key typo
+		parseSpec(t, `{"driver":"sim-focuser","port":11200}`),         // ok
+		parseSpec(t, `{"driver":"sim-focuser","enable":false}`),       // skipped (no port needed)
+		parseSpec(t, `{"driver":"sim-focuser"}`),                      // missing port
+		parseSpec(t, `{"driver":"nope","port":11201}`),                // unknown driver
+		parseSpec(t, `{"driver":"asieaf","port":11202,"serail":"x"}`), // driver-key typo
 		// Sharing a port is legal (this is focuser/1 there), but pinning a number an
 		// earlier entry already took is not.
 		parseSpec(t, `{"driver":"sim-focuser","port":11200}`),
@@ -147,7 +147,7 @@ func TestCheckConfigFindsProblems(t *testing.T) {
 }
 
 // TestCheckConfigFatalListen: a "listen" entry that resolves to nothing stops
-// serve before any device exists, so it is the one thing -check exits non-zero
+// serve before any device exists, the one condition -check exits non-zero
 // for with a loaded config.
 func TestCheckConfigFatalListen(t *testing.T) {
 	cfg := &Config{
@@ -166,7 +166,7 @@ func TestCheckConfigFatalListen(t *testing.T) {
 
 // TestCheckConfigIgnoresFrontEndKeys: the keys of the removed INDI and LX200
 // front-ends ("indi", "lx200Port") stay common keys, so an old entry carrying
-// them checks clean — they never reach the driver's strict decode.
+// them checks clean: they never reach the driver's strict decode.
 func TestCheckConfigIgnoresFrontEndKeys(t *testing.T) {
 	cfg := &Config{Devices: []DeviceSpec{
 		parseSpec(t, `{"driver":"sim-focuser","port":11200,"indi":true,"lx200Port":4040}`),

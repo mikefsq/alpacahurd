@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -12,14 +13,12 @@ import (
 	alpacadev "github.com/mikefsq/goalpaca/server"
 )
 
-// subSpecs expands a multi-device entry into one spec per block of its
-// driver's MultiKey array (astrocam's "cameras"): the block body becomes the
-// sub-entry's Raw, the block's position is its pinned device number, and a
-// block's "name" and "enable" are its own. An entry without the key — the
-// flat one-device form — is returned as itself, so both file forms stay
-// valid, and a driver that is not compiled in is too (a separate binary reads
-// the whole file itself). A MultiKey entry with neither blocks nor flat
-// driver keys defaults to two empty blocks, the driver's documented default.
+// subSpecs expands a multi-device entry (a driver with a MultiKey, such as
+// astrocam's "cameras") into one spec per block: the block is the sub-entry's
+// Raw, its position is its device number, and its "name" and "enable" are its
+// own. A flat entry, or one whose driver is not compiled in, is returned
+// unchanged. A MultiKey entry with no blocks and no flat driver keys defaults
+// to two empty blocks.
 func subSpecs(spec DeviceSpec) ([]DeviceSpec, error) {
 	drv, ok := registry.Lookup(spec.Driver)
 	if !ok || drv.MultiKey == "" {
@@ -66,6 +65,27 @@ func subSpecs(spec DeviceSpec) ([]DeviceSpec, error) {
 	return subs, nil
 }
 
+// wireFrontEnd starts the driver's front-end (a mount's LX200 bridge) for
+// the device registered on srv at (drv.Type, num) and returns the stop
+// function that ends it. The front-end's context ends with stop or with ctx.
+// The getter resolves the current registration, so a reload's device swap is
+// followed. hosts are the addresses the Alpaca servers bind. A driver
+// without a front-end returns a no-op stop.
+func wireFrontEnd(ctx context.Context, drv registry.Driver, srv *alpacadev.Server, num int, spec DeviceSpec, hosts []string) context.CancelFunc {
+	if drv.FrontEnd == nil {
+		return func() {}
+	}
+	fctx, stop := context.WithCancel(ctx)
+	getDev := func() alpacadev.Device {
+		d, _ := srv.Device(drv.Type, num)
+		return d
+	}
+	if err := drv.FrontEnd(fctx, getDev, spec.Raw, hosts); err != nil {
+		log.Printf("alpacahurd: %s: front-end: %v", spec.Instance, err)
+	}
+	return stop
+}
+
 // buildDevice constructs the device named by spec.Driver through the driver
 // registry. Construction touches no hardware; the device's hardware loop is
 // started later by its Alpaca server's Run.
@@ -74,11 +94,11 @@ func buildDevice(spec DeviceSpec) (registry.Driver, alpacadev.Device, error) {
 	if !ok {
 		switch strings.ToLower(spec.Driver) {
 		case "asiccd", "asicaa":
-			// The ZWO-SDK (cgo) devices are deliberately not part of the vendor-free herd.
+			// The ZWO-SDK (cgo) devices are not part of the vendor-free herd.
 			return registry.Driver{}, nil, fmt.Errorf("%q needs the ZWO SDK (cgo) and is not built into alpacahurd; "+
 				"run its standalone cmd, or use the Go \"astrocam\" driver for ZWO cameras", spec.Driver)
 		}
-		return registry.Driver{}, nil, fmt.Errorf("unknown driver %q — not compiled into this binary "+
+		return registry.Driver{}, nil, fmt.Errorf("unknown driver %q: not compiled into this binary "+
 			"(alpacahurd -drivers lists what is; add its module to hurd.conf and rebuild)", spec.Driver)
 	}
 	devNum := 0
@@ -93,9 +113,9 @@ func buildDevice(spec DeviceSpec) (registry.Driver, alpacadev.Device, error) {
 }
 
 // deviceNumbers hands out ASCOM device numbers for the entries sharing one
-// Alpaca port. Numbers are scoped per device type — the URL is
-// /api/v1/{type}/{number}/ — so a camera and a focuser on one port are both
-// device 0, while two cameras there are 0 and 1.
+// Alpaca port. Numbers are scoped per device type (the URL is
+// /api/v1/{type}/{number}/): a camera and a focuser on one port are both
+// device 0; two cameras there are 0 and 1.
 //
 // An entry pins its own number with "device"; the rest take the lowest free one
 // in config order. Numbers are claimed as the entries are walked, so pinning a

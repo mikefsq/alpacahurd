@@ -8,16 +8,16 @@ Wants=network-online.target
 [Service]
 Type=simple
 # Report the config before starting, so the journal carries a readable table
-# of every device. It exits non-zero only when the server itself cannot start;
-# an entry with an error is reported and skipped at start, the rest of the
-# herd serves, and the orchestrator page shows the error beside its switch.
+# of every device. It exits non-zero only when the server itself cannot start.
+# An entry with an error is reported, skipped at start, and shown on the
+# orchestrator page beside its switch; the rest of the herd serves.
 ExecStartPre=/usr/local/bin/alpacahurd -check -config /etc/alpacahurd/hurd.json
 ExecStart=/usr/local/bin/alpacahurd -config /etc/alpacahurd/hurd.json
 # systemctl reload: every device re-reads its file and reopens its hardware,
 # ports kept. A port change or a new device is a restart.
 ExecReload=/bin/kill -HUP $MAINPID
-# Restart if the process exits non-zero (e.g. a device goroutine panics — the
-# whole herd shares one process, so systemd is the recovery net).
+# Restart if the process exits non-zero. A device goroutine panic takes the
+# shared process down; systemd is the recovery net.
 Restart=on-failure
 RestartSec=5
 

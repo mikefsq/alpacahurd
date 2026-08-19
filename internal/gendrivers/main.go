@@ -1,5 +1,5 @@
 // Command gendrivers turns hurd.conf (one driver package import path per line,
-// # comments) into drivers_gen.go — the blank-import list that compiles those
+// # comments) into drivers_gen.go: the blank-import list that compiles those
 // drivers into alpacahurd. Run via `make gen` (or `go run ./internal/gendrivers`)
 // from the repo root.
 package main

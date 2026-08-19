@@ -8,8 +8,8 @@
       workspace   (re)write go.work over the sibling checkouts (pre-release only)
       tidy        resolve every dependency from the module proxy (no siblings needed)
       gen         regenerate drivers_gen.go from hurd.conf
-      build       build the bare orchestrator (no compiled-in drivers)
-      fat         bundle the hurd.conf drivers into alpacahurd.exe
+      build       the bare orchestrator: sim drivers only, hardware as separate binaries
+      fat         bundle the hurd.conf drivers into the binary (compiled-in layout)
       all         build (default)
       test        run the test suite
       install     install the binary + config and register a startup task (admin)
@@ -43,6 +43,7 @@ $LogDir     = Join-Path $InstallDir "logs"
 # Keep in sync with the Makefile's WS_DIRS.
 $Libs = @(
     "..\goalpaca", "..\lx200", "..\goindi", "..\astrocam", "..\goasi",
+    "..\goasi\asiair", "..\ptp", "..\stellarmate",
     "..\oasis-astro", "..\optec", "..\pegasus-astro", "..\astromi.ch", "..\unihedron"
 )
 
@@ -68,8 +69,8 @@ alpacahurd make.ps1 targets:
   workspace   (re)write go.work over the sibling checkouts (pre-release only)
   tidy        resolve every dependency from the module proxy (no siblings needed)
   gen         regenerate drivers_gen.go from hurd.conf
-  build       build the bare orchestrator (no compiled-in drivers)
-  fat         bundle the hurd.conf drivers into $Bin
+  build       the bare orchestrator: sim drivers only, hardware as separate binaries
+  fat         bundle the hurd.conf drivers into the binary (compiled-in layout)
   all         build (default)
   test        run the test suite
   install     install binary + config and register a startup task (admin)
@@ -78,7 +79,7 @@ alpacahurd make.ps1 targets:
 
 Two ways to resolve the dependencies on a fresh box:
 
-  .\make.ps1 tidy        no sibling checkouts — everything comes from the module
+  .\make.ps1 tidy        no sibling checkouts; everything comes from the module
                          proxy and is pinned in go.mod/go.sum. Run this once,
                          then '.\make.ps1'. Committing the resulting go.mod and
                          go.sum makes a plain clone build with no setup at all.
@@ -108,7 +109,7 @@ function Target-Gen  { Invoke-Native go @("run", ".\internal\gendrivers") }
 
 function Target-Tidy {
     # Regenerate drivers_gen.go, then resolve every dependency from the module
-    # proxy into go.mod/go.sum — no sibling checkouts needed. (This used to pre-
+    # proxy into go.mod/go.sum; no sibling checkouts needed. (This used to pre-
     # `go get` astromi.ch/unihedron/lx200 to work around stale published go.mods;
     # goalpaca-devices was republished with correct requirements, so a plain tidy
     # now resolves the whole graph.)
@@ -119,11 +120,12 @@ function Target-Tidy {
 
 function Target-Build {
     # The bare orchestrator: drivers_gen.go carries `//go:build fat`, so this
-    # build excludes it and every device entry resolves to an installed driver
-    # binary. The Windows transports are pure Go; no C toolchain required.
+    # build excludes it and every hardware entry resolves to an installed
+    # driver binary; the sims are in both flavors. The Windows transports are
+    # pure Go; no C toolchain required.
     $env:CGO_ENABLED = "0"
     Invoke-Native go @("build", "-o", $Bin, ".")
-    Write-Host "built .\$Bin (bare: no compiled-in drivers)"
+    Write-Host "built .\$Bin (bare: sim drivers only)"
 }
 
 function Target-Fat {
@@ -150,8 +152,8 @@ function Target-Install {
     if (Test-Path $Config) {
         Write-Host "keeping existing config $Config"
     } else {
-        # Seed the server config: discovery, INDI, LX200 blocks and no inline
-        # devices. WriteAllText emits UTF-8 with no BOM, which the JSON loader needs.
+        # Seed the server config: the server blocks and no inline devices.
+        # WriteAllText emits UTF-8 with no BOM, which the JSON loader needs.
         $example = (& $ExeDst -example | Out-String)
         [System.IO.File]::WriteAllText($Config, $example)
         Write-Host "installed server config -> $Config"

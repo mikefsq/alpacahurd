@@ -12,8 +12,8 @@ import (
 
 // TestDiscoveryIPv6RoundTrip sends a real Alpaca IPv6 multicast probe and asserts
 // the hurd responder replies with the advertised AlpacaPort. The probe is sent the
-// way a real Alpaca client sends it — with the egress multicast interface set
-// explicitly — on each multicast-capable interface, so this exercises the
+// way a real Alpaca client sends it (with the egress multicast interface set
+// explicitly) on each multicast-capable interface, so this exercises the
 // responder's multi-interface JoinGroup path end to end. Skips only if the host has
 // no IPv6 multicast interface at all.
 func TestDiscoveryIPv6RoundTrip(t *testing.T) {
@@ -67,7 +67,7 @@ func probeReply(t *testing.T, ifi *net.Interface, group, want []byte) bool {
 }
 
 // multicastInterfaces returns up, multicast-capable, non-loopback interfaces that
-// have an IPv6 address — the ones a client would probe over.
+// have an IPv6 address: the ones a client would probe over.
 func multicastInterfaces() []net.Interface {
 	var out []net.Interface
 	ifs, _ := net.Interfaces()

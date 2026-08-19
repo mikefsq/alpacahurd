@@ -4,7 +4,8 @@
 # Usage (run from the repo root, as root — `sudo make install` does this):
 #   sudo deploy/install.sh [path-to-alpacahurd-binary]
 #
-# Defaults to ./alpacahurd. Build one first with `make`.
+# Defaults to ./alpacahurd. Build one first: `make fat` for the compiled-in
+# layout, `make` for the bare orchestrator over separate driver binaries.
 set -euo pipefail
 
 BIN_SRC="${1:-./alpacahurd}"
@@ -33,7 +34,7 @@ mkdir -p "$CONF_DIR"
 if [[ -f "$CONF_DST" ]]; then
 	echo "keeping existing config $CONF_DST"
 else
-	# Seed the server config: discovery, INDI, LX200 blocks and no inline devices.
+	# Seed the server config: the server blocks and no inline devices.
 	"$BIN_DST" -example >"$CONF_DST"
 	chmod 0644 "$CONF_DST"
 	echo "installed server config -> $CONF_DST"

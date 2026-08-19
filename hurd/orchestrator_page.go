@@ -81,6 +81,9 @@ type orchRow struct {
 	// reloadable is set for an in-process device the server can reload in
 	// place; a separate binary is asked over HTTP and decides for itself.
 	reloadable bool
+	// stopFrontEnd ends the device's front-end (wireFrontEnd); nil when none
+	// was wired. The disable path calls it.
+	stopFrontEnd context.CancelFunc
 }
 
 // noteRegistration records a heartbeat against the row whose instance it
@@ -597,11 +600,10 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 			pr.Toggle = row.spec.Instance != ""
 		default:
 			// Enabled but not running here and not registered. Only a driver
-			// that resolves to a separate binary belongs to the supervisor; a
+			// that resolves to a separate binary belongs to the supervisor. A
 			// compiled-in (or unresolved) driver lands here when an add or an
-			// edit turned its file on without starting it, and gets the page
-			// switch — a supervisor start on it would launch a doomed
-			// `alpacahurd -launch`.
+			// edit turned its file on without starting it; it gets the page
+			// switch.
 			if row.res.kind != installedBinary {
 				pr.How, pr.State = row.res.kind.String(), "not running"
 				if row.port != 0 {

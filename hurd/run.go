@@ -396,6 +396,22 @@ func serve(cfg *Config, cfgPath string) {
 		}
 	})
 
+	// Driver front-ends (a mount's LX200 bridge): the driver wires its own
+	// from the device's entry, the same call devicemain makes in a separate
+	// binary. A row whose server failed to bind serves no Alpaca and gets no
+	// front-end. Each row keeps its stop function for the disable path.
+	orch.mu.Lock()
+	for i := range orch.rows {
+		row := &orch.rows[i]
+		if !row.inProcess {
+			continue
+		}
+		if drv, ok := registry.Lookup(row.spec.Driver); ok {
+			row.stopFrontEnd = wireFrontEnd(ctx, drv, byPort[row.srvKey], row.num, row.spec, listenAddrs)
+		}
+	}
+	orch.mu.Unlock()
+
 	log.Printf("alpacahurd: serving %d device(s) on %d port(s) (Ctrl-C to stop)", len(devices), len(servers))
 
 	select {

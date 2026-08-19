@@ -61,8 +61,8 @@ func configured(t *testing.T, base string) []cfgDev {
 }
 
 // TestRegistryDriversServe: every hardware driver constructs from a config entry
-// through the registry and serves as exactly device 0 of its ASCOM type on its
-// own server — the per-port model, where a client (PHD2) asking for <type>/0
+// through the registry and serves as device 0 of its ASCOM type on its
+// own server: the per-port model, where a client (PHD2) asking for <type>/0
 // must always be right.
 func TestRegistryDriversServe(t *testing.T) {
 	cases := []struct {
@@ -97,7 +97,7 @@ func TestRegistryDriversServe(t *testing.T) {
 }
 
 // TestSharedPortNumbersDevices: entries naming the same port land on one server
-// as device 0, 1, … of their type — the layout a client that shows one Alpaca
+// as device 0, 1, … of their type: the layout a client that shows one Alpaca
 // server per address (ZWO's ASIStudio) needs to see two cameras at once.
 // Numbering is per ASCOM type, so a focuser alongside them is still device 0.
 func TestSharedPortNumbersDevices(t *testing.T) {

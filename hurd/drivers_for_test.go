@@ -2,7 +2,7 @@ package hurd
 
 // The engine tests exercise construction through the registry, so the test
 // binary compiles in the same default driver set as the shipped binary
-// (drivers_gen.go in the root package — which the hurd package deliberately
+// (drivers_gen.go in the root package, which the hurd package
 // does not import).
 import (
 	_ "github.com/mikefsq/goalpaca-devices/asiam5"

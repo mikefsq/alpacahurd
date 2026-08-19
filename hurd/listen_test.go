@@ -41,14 +41,14 @@ func TestResolveListenInterfaceBindsBothStacks(t *testing.T) {
 }
 
 // TestResolveListenIPLiteralIsSingleStack documents that a bare IPv4 literal binds
-// IPv4 only — the trap that motivated interface-name support.
+// IPv4 only, the case that motivated interface-name support.
 func TestResolveListenIPLiteralIsSingleStack(t *testing.T) {
 	addrs, _, err := resolveListen([]string{"127.0.0.1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(addrs) != 1 || addrs[0] != "127.0.0.1" {
-		t.Fatalf("resolveListen([127.0.0.1]) = %v; want exactly [127.0.0.1]", addrs)
+		t.Fatalf("resolveListen([127.0.0.1]) = %v; want [127.0.0.1]", addrs)
 	}
 }
 

@@ -13,8 +13,9 @@ import (
 )
 
 func TestResolveConfigPath(t *testing.T) {
-	// An explicit -config value always wins and is returned verbatim (not stat'd) —
-	// so an explicit path that doesn't exist still surfaces as a LoadConfig read error.
+	// An explicit -config value always wins and is returned verbatim (not
+	// stat'd), so an explicit path that doesn't exist still surfaces as a
+	// LoadConfig read error.
 	if got, err := resolveConfigPath("/some/explicit.json"); err != nil || got != "/some/explicit.json" {
 		t.Fatalf("explicit: got %q, %v; want /some/explicit.json", got, err)
 	}
@@ -88,7 +89,7 @@ func TestLoadConfig(t *testing.T) {
 }
 
 // TestCommonKeysMatchRegistry keeps the engine's deviceCommon in lock-step with
-// registry.CommonKeys: the registry strips exactly these keys before a driver's
+// registry.CommonKeys: the registry strips these keys before a driver's
 // strict decode, so a field added on one side but not the other either leaks an
 // engine key into driver decodes (spurious "unknown field") or silently drops a
 // driver key from them.

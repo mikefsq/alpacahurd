@@ -1,6 +1,6 @@
 // Package hurd is the alpacahurd engine: it loads a device config, constructs
 // each enabled device through the goalpaca driver registry, and serves the
-// whole herd — per-device Alpaca servers and one shared discovery responder —
+// whole herd (per-device Alpaca servers and one shared discovery responder)
 // in a single process.
 package hurd
 
@@ -22,11 +22,12 @@ import (
 type Config struct {
 	Discovery string `json:"discovery"` // direct | off
 
-	// Listen restricts which interfaces the hurd serves on, applied to the Alpaca
-	// servers and discovery. Each entry is an interface name
-	// (e.g. "en0", "eth0", "lo") — expanding to all of its addresses, both IP stacks —
-	// or an IP literal (a bare IPv4 literal is IPv4-only). Empty (the default) binds
-	// every interface (":port") on both stacks. See resolveListen.
+	// Listen restricts which interfaces the hurd serves on. It applies to the
+	// Alpaca servers and discovery. An interface name entry (e.g. "en0",
+	// "eth0", "lo") expands to all of that interface's addresses on both IP
+	// stacks. An IP literal entry binds that address (a bare IPv4 literal is
+	// IPv4-only). Empty, the default, binds every interface (":port") on both
+	// stacks. See resolveListen.
 	Listen []string `json:"listen,omitempty"`
 
 	// IPv6 also answers Alpaca discovery over IPv6 multicast (group ff12::a1:9aca),
@@ -71,9 +72,10 @@ const defaultSetupPort = 32227
 func (c *Config) ipv6Enabled() bool { return c.IPv6 == nil || *c.IPv6 }
 
 // DeviceSpec declares one device: the engine-owned common fields, plus the raw
-// config entry the selected driver decodes its own fields from (registry.Spec.
-// Decode — strict, so a typo in a driver field is an error there). The common
-// field set must match registry.CommonKeys; a test enforces it.
+// config entry the selected driver decodes its own fields from
+// (registry.Spec.Decode, which is strict, so a typo in a driver field is an
+// error there). The common field set must match registry.CommonKeys; a test
+// enforces it.
 //
 // Each device gets its own acquire/monitor/re-acquire goroutine, so it is
 // picked up whenever its hardware appears and survives unplug/replug
@@ -131,17 +133,15 @@ type deviceCommon struct {
 	// device on a port is always 0. Pin them once clients have stored device URLs:
 	// otherwise disabling one entry renumbers the ones after it.
 	Device *int `json:"device,omitempty"`
-
 }
 
-// The INDI and LX200 front-ends left the hurd for the driver binaries, so the
-// keys that configured them here (indi, lx200Port, the optics block, and
-// guideRate) are no longer read: registry.CommonKeys still lists them, so the
-// loose decode above ignores them in an old file and a driver's strict decode
-// never sees them.
+// The front-end keys (indi, lx200Port, the optics block, guideRate) are not
+// read here: those front-ends live in the drivers. registry.CommonKeys still
+// lists them, so an old file's keys are ignored here and stripped before a
+// driver's strict decode.
 
 // UnmarshalJSON decodes the common fields loosely (driver-owned keys are not
-// errors here — the driver's strict Decode covers them) and keeps the whole
+// errors here; the driver's strict Decode covers them) and keeps the whole
 // entry for the driver.
 func (d *DeviceSpec) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &d.deviceCommon); err != nil {

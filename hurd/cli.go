@@ -24,7 +24,7 @@ func printDrivers(w io.Writer) {
 }
 
 // printExample writes a starter config assembled from every compiled-in
-// hardware driver's ConfigExample (each entry disabled, on a sequential port —
+// hardware driver's ConfigExample (each entry disabled, on a sequential port;
 // flip "enable" and fill in your identifiers), or a single driver's entry when
 // name is given. install.sh uses the full form to seed /etc/alpacahurd/hurd.json.
 func printExample(w io.Writer, name string) error {
@@ -113,11 +113,11 @@ func exampleEntry(d registry.Driver, port int, disabled bool) (string, error) {
 
 // checkConfig validates cfg by constructing every enabled device (no hardware
 // is touched; construction only binds identities). It prints one line per
-// device and returns two counts: fatal is what keeps the server itself from
-// starting (an unusable "listen"), and errs is per-device problems. serve
-// skips an entry with an error and serves the rest, so -check's exit gates on
-// fatal alone; supervisors run it as a pre-start step for the readable report,
-// not so one bad device file keeps the herd down.
+// device and returns two counts. fatal counts what stops the server itself,
+// such as an unusable "listen". errs counts per-device problems, which serve
+// skips while serving the rest, so -check's exit gates on fatal alone. A
+// supervisor runs -check as a pre-start step for the readable report; one bad
+// device file must not keep the herd down.
 func checkConfig(w io.Writer, cfg *Config) (fatal, errs int) {
 	fail := func(spec DeviceSpec, format string, args ...any) {
 		fmt.Fprintf(w, "error  %-22s %s\n", spec.Driver, fmt.Sprintf(format, args...))
@@ -131,8 +131,8 @@ func checkConfig(w io.Writer, cfg *Config) (fatal, errs int) {
 		fatal++
 	}
 
-	// Device numbers are per port, assigned exactly as serve does, so -check
-	// reports the addresses the hurd will actually serve.
+	// Device numbers are per port, assigned as serve assigns them, so -check
+	// reports the addresses the hurd will serve.
 	nums := map[int]*deviceNumbers{}
 	enabled := 0
 	for _, spec := range cfg.Devices {

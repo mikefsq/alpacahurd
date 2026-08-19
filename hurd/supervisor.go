@@ -12,8 +12,8 @@ import (
 // each call out per instance; the interface is per-instance.
 //
 // The orchestrator does not own the processes. It asks the supervisor to act on
-// them, and each device is a peer under the supervisor, which is what keeps a
-// device running when the orchestrator itself is restarted.
+// them, and each device is a peer under the supervisor, so a device keeps
+// running when the orchestrator itself is restarted.
 //
 // Every supervisor launches the same command line, `alpacahurd -launch
 // <instance> -config <hurd.json>`, and alpacahurd then resolves the entry's
