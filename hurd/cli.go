@@ -115,13 +115,22 @@ func exampleEntry(d registry.Driver, port int, disabled bool) (string, error) {
 
 // checkConfig validates cfg by constructing every enabled device (no hardware
 // is touched; construction only binds identities). It prints one line per
-// device and returns the number of errors; systemd runs this as ExecStartPre so
-// a bad config fails fast with a readable journal message.
-func checkConfig(w io.Writer, cfg *Config) int {
-	errs := 0
+// device and returns two counts: fatal is what keeps the server itself from
+// starting (an unusable "listen"), and errs is per-device problems. serve
+// skips an entry with an error and serves the rest, so -check's exit gates on
+// fatal alone; supervisors run it as a pre-start step for the readable report,
+// not so one bad device file keeps the herd down.
+func checkConfig(w io.Writer, cfg *Config) (fatal, errs int) {
 	fail := func(spec DeviceSpec, format string, args ...any) {
 		fmt.Fprintf(w, "error  %-22s %s\n", spec.Driver, fmt.Sprintf(format, args...))
 		errs++
+	}
+
+	// The one whole-server check: serve resolves "listen" before anything else
+	// and cannot start when it does not resolve.
+	if _, _, err := resolveListen(cfg.Listen); err != nil {
+		fmt.Fprintf(w, "fatal  %-22s %v\n", "listen", err)
+		fatal++
 	}
 
 	// Device numbers are per port, assigned exactly as serve does, so -check
@@ -190,5 +199,8 @@ func checkConfig(w io.Writer, cfg *Config) int {
 		fmt.Fprintf(w, "warn   no enabled devices (the server will start and idle)\n")
 	}
 	fmt.Fprintf(w, "%d device(s) enabled, %d error(s)\n", enabled, errs)
-	return errs
+	if errs > 0 {
+		fmt.Fprintf(w, "an entry with an error is skipped at start; the rest of the herd serves\n")
+	}
+	return fatal, errs
 }

@@ -63,7 +63,8 @@ func Main() {
 			"name a driver as an argument (alpacahurd -example astrocam) for just its entry")
 	check := flag.Bool("check", false,
 		"load the config and construct every enabled device (no hardware is touched), "+
-			"report problems, and exit non-zero on any error")
+			"report problems, and exit non-zero when the server cannot start; an entry "+
+			"with an error is reported but skipped at start, so it does not fail the check")
 	exampleDevices := flag.String("example-devices", "",
 		"write one disabled example device file per compiled-in driver into this directory "+
 			"(the devices.d beside hurd.json) and exit; existing files are kept")
@@ -99,14 +100,23 @@ func Main() {
 
 	if *launchInstance != "" {
 		if err := launch(resolvedCfg, cfg, *launchInstance); err != nil {
-			log.Fatalf("alpacahurd: %v", err)
+			// A launch that fails here never reached the driver: the entry is
+			// missing, its driver is compiled in, or its binary is gone. That
+			// is a config mismatch a retry cannot fix, so exit EX_CONFIG,
+			// which the template unit's RestartPreventExitStatus knows.
+			log.Printf("alpacahurd: %v", err)
+			os.Exit(78)
 		}
 		return
 	}
 
 	if *check {
 		fmt.Printf("checking %s\n", resolvedCfg)
-		if errs := checkConfig(os.Stdout, cfg); errs > 0 {
+		// Exit non-zero only for what stops the server itself: serve skips an
+		// entry with an error and serves the rest, so a supervisor's pre-start
+		// check must not keep the whole herd down for one bad device file.
+		// (An unloadable config already exited above, before the table.)
+		if fatal, _ := checkConfig(os.Stdout, cfg); fatal > 0 {
 			os.Exit(1)
 		}
 		return

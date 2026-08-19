@@ -23,6 +23,10 @@ ExecStart=/usr/local/bin/alpacahurd -launch %i -config /etc/alpacahurd/hurd.json
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
+# alpacahurd -launch exits 78 (EX_CONFIG) when the entry cannot launch at all:
+# no such instance, its driver compiled into alpacahurd, or its binary gone.
+# Retrying cannot fix that, so the unit stays down instead of looping.
+RestartPreventExitStatus=78
 User=root
 # The same directories as the orchestrator: the device file under
 # /etc/alpacahurd, the state file the setup page writes under /var/lib.

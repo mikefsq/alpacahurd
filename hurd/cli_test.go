@@ -75,12 +75,12 @@ func TestExampleConfigIsUsable(t *testing.T) {
 		t.Fatalf("uncommented seed does not load: %v", err)
 	}
 	out.Reset()
-	if errs := checkConfig(&out, cfg); errs != 0 || !strings.Contains(out.String(), "focuser/0 on port 11250") {
+	if fatal, errs := checkConfig(&out, cfg); fatal+errs != 0 || !strings.Contains(out.String(), "focuser/0 on port 11250") {
 		t.Errorf("uncommented seed should check ok on port 11250:\n%s", out.String())
 	}
 	out.Reset()
-	if errs := checkConfig(&out, cfg); errs != 0 {
-		t.Fatalf("checkConfig(example) = %d error(s):\n%s", errs, out.String())
+	if fatal, errs := checkConfig(&out, cfg); fatal+errs != 0 {
+		t.Fatalf("checkConfig(example) = %d fatal, %d error(s):\n%s", fatal, errs, out.String())
 	}
 	// A second run keeps every existing file.
 	out.Reset()
@@ -107,7 +107,8 @@ func TestSingleDriverExample(t *testing.T) {
 }
 
 // TestCheckConfigFindsProblems: each class of config mistake is reported as an
-// error (checkConfig is the systemd ExecStartPre gate, so these must fail fast).
+// error, and none is fatal: serve skips an entry with an error and serves the
+// rest, so a supervisor's pre-start -check must not gate startup on them.
 func TestCheckConfigFindsProblems(t *testing.T) {
 	cfg := &Config{Devices: []DeviceSpec{
 		parseSpec(t, `{"driver":"sim-focuser","port":11200}`),                  // ok
@@ -126,10 +127,16 @@ func TestCheckConfigFindsProblems(t *testing.T) {
 		parseSpec(t, `{"driver":"sim-telescope","port":11205,"name":"M","indi":true}`),
 	}}
 	var out bytes.Buffer
-	errs := checkConfig(&out, cfg)
+	fatal, errs := checkConfig(&out, cfg)
 	const want = 7 // missing port, unknown, typo, lx200Port, pinned dup, negative, INDI name
 	if errs != want {
 		t.Fatalf("checkConfig = %d errors, want %d:\n%s", errs, want, out.String())
+	}
+	if fatal != 0 {
+		t.Fatalf("device errors must not be fatal (serve skips those entries), got %d:\n%s", fatal, out.String())
+	}
+	if !strings.Contains(out.String(), "skipped at start") {
+		t.Errorf("the summary should say erroneous entries are skipped at start:\n%s", out.String())
 	}
 	// The second entry on port 11200 is a legal device 1, not an error.
 	if !strings.Contains(out.String(), "focuser/1 on port 11200") {
@@ -143,6 +150,24 @@ func TestCheckConfigFindsProblems(t *testing.T) {
 	}
 }
 
+// TestCheckConfigFatalListen: a "listen" entry that resolves to nothing stops
+// serve before any device exists, so it is the one thing -check exits non-zero
+// for with a loaded config.
+func TestCheckConfigFatalListen(t *testing.T) {
+	cfg := &Config{
+		Listen:  []string{"no-such-interface-0"},
+		Devices: []DeviceSpec{parseSpec(t, `{"driver":"sim-focuser","port":11200}`)},
+	}
+	var out bytes.Buffer
+	fatal, errs := checkConfig(&out, cfg)
+	if fatal != 1 || errs != 0 {
+		t.Fatalf("fatal, errors = %d, %d, want 1, 0:\n%s", fatal, errs, out.String())
+	}
+	if !strings.Contains(out.String(), "fatal") || !strings.Contains(out.String(), "no-such-interface-0") {
+		t.Errorf("the fatal line should name the listen entry:\n%s", out.String())
+	}
+}
+
 // TestCheckConfigWarnsIndiIncapable: "indi": true on a device that can't join
 // the hub is a warning, not an error (the herd still runs; the flag is ignored).
 func TestCheckConfigWarnsIndiIncapable(t *testing.T) {
@@ -150,7 +175,7 @@ func TestCheckConfigWarnsIndiIncapable(t *testing.T) {
 		parseSpec(t, `{"driver":"sim-focuser","port":11200,"indi":true}`),
 	}}
 	var out bytes.Buffer
-	if errs := checkConfig(&out, cfg); errs != 0 {
+	if fatal, errs := checkConfig(&out, cfg); fatal+errs != 0 {
 		t.Fatalf("INDI-incapable device should warn, not error:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "not INDI-capable") {

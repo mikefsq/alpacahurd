@@ -7,8 +7,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Validate the config before starting, so a typo fails fast with a readable
-# journal message instead of a crash loop.
+# Report the config before starting, so the journal carries a readable table
+# of every device. It exits non-zero only when the server itself cannot start;
+# an entry with an error is reported and skipped at start, the rest of the
+# herd serves, and the orchestrator page shows the error beside its switch.
 ExecStartPre=/usr/local/bin/alpacahurd -check -config /etc/alpacahurd/hurd.json
 ExecStart=/usr/local/bin/alpacahurd -config /etc/alpacahurd/hurd.json
 # systemctl reload: every device re-reads its file and reopens its hardware,

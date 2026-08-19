@@ -249,9 +249,9 @@ func (o *orchestrator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		o.render(w, r, "", "")
 	case rest == "/check":
 		var b strings.Builder
-		errs := checkConfig(&b, o.cfg)
+		fatal, errs := checkConfig(&b, o.cfg)
 		kind := "ok"
-		if errs > 0 {
+		if fatal+errs > 0 {
 			kind = "error"
 		}
 		o.render(w, r, b.String(), kind)
@@ -289,12 +289,22 @@ func (o *orchestrator) handleAction(w http.ResponseWriter, r *http.Request) {
 		}
 		o.renderOutput(w, r, b.String())
 		return
-	case "start":
-		err = o.sup.Start(ctx, inst)
-	case "stop":
-		err = o.sup.Stop(ctx, inst)
-	case "restart":
-		err = o.sup.Restart(ctx, inst)
+	case "start", "stop", "restart":
+		// Supervisor actions apply only to a separate binary: starting the
+		// unit of a compiled-in driver launches an `alpacahurd -launch` that
+		// can only fail.
+		if kind, known := o.resolutionKind(inst); known && kind != installedBinary {
+			err = fmt.Errorf("%s: its driver is %s, not a separate binary; the enable/disable switch runs it", inst, kind)
+			break
+		}
+		switch action {
+		case "start":
+			err = o.sup.Start(ctx, inst)
+		case "stop":
+			err = o.sup.Stop(ctx, inst)
+		case "restart":
+			err = o.sup.Restart(ctx, inst)
+		}
 	case "enable", "disable":
 		ectx, ecancel := context.WithTimeout(r.Context(), enableTimeout)
 		defer ecancel()
@@ -313,6 +323,19 @@ func (o *orchestrator) handleAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o.render(w, r, fmt.Sprintf("%s %s: done", action, inst), "ok")
+}
+
+// resolutionKind reports how inst's driver resolves, when the table knows the
+// instance.
+func (o *orchestrator) resolutionKind(inst string) (resolutionKind, bool) {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	for i := range o.rows {
+		if o.rows[i].spec.Instance == inst {
+			return o.rows[i].res.kind, true
+		}
+	}
+	return unresolved, false
 }
 
 // handleAdd writes a new device file from a driver's commented schema. The
@@ -573,6 +596,20 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 			pr.Reload = row.reloadable
 			pr.Toggle = row.spec.Instance != ""
 		default:
+			// Enabled but not running here and not registered. Only a driver
+			// that resolves to a separate binary belongs to the supervisor; a
+			// compiled-in (or unresolved) driver lands here when an add or an
+			// edit turned its file on without starting it, and gets the page
+			// switch — a supervisor start on it would launch a doomed
+			// `alpacahurd -launch`.
+			if row.res.kind != installedBinary {
+				pr.How, pr.State = row.res.kind.String(), "not running"
+				if row.port != 0 {
+					pr.Port = fmt.Sprint(row.port)
+				}
+				pr.Toggle = row.spec.Instance != ""
+				break
+			}
 			pr.How = "separate binary"
 			pr.Actions = true
 			if row.port != 0 {
@@ -666,7 +703,7 @@ button.small{font-size:.85rem;padding:.2rem .6rem;margin:0 .1rem}
 {{if .Enabled}}<button class="small" name="action" value="disable">disable</button>{{else}}<button class="small" name="action" value="enable">enable</button>{{end}}
 <button class="small" name="action" value="logs">logs</button>
 </form>{{end}}
-{{if .Toggle}}<form class="inline" method="post" action="/setup"><input type="hidden" name="instance" value="{{.Instance}}">{{if .Enabled}}<button class="small" name="action" value="disable" title="close the hardware and remove the device; the switch is recorded in its state file">disable</button>{{else}}<button class="small" name="action" value="enable" title="construct the device and serve it now; the switch is recorded in its state file">enable</button>{{end}}</form>{{end}}
+{{if .Toggle}}<form class="inline" method="post" action="/setup"><input type="hidden" name="instance" value="{{.Instance}}">{{if .Enabled}}{{if not .Running}}<button class="small" name="action" value="enable" title="construct the device and serve it now">start</button>{{end}}<button class="small" name="action" value="disable" title="close the hardware and remove the device; the switch is recorded in its state file">disable</button>{{else}}<button class="small" name="action" value="enable" title="construct the device and serve it now; the switch is recorded in its state file">enable</button>{{end}}</form>{{end}}
 {{if .Reload}}<form class="inline" method="post" action="/setup"><input type="hidden" name="instance" value="{{.Instance}}"><input type="hidden" name="uniqueid" value="{{.UniqueID}}"><button class="small" name="action" value="reload" title="re-read the device's configuration and reopen its hardware; the port stays">reload</button></form>{{end}}</td>
 </tr>{{end}}
 </table>

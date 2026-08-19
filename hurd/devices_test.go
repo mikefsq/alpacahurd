@@ -240,9 +240,9 @@ func TestUnresolvableFragmentIsWarning(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	errs := checkConfig(&out, c)
-	if errs != 1 {
-		t.Errorf("errors = %d, want 1 (the inline unknown driver):\n%s", errs, out.String())
+	fatal, errs := checkConfig(&out, c)
+	if fatal != 0 || errs != 1 {
+		t.Errorf("fatal, errors = %d, %d, want 0, 1 (the inline unknown driver):\n%s", fatal, errs, out.String())
 	}
 	if !strings.Contains(out.String(), "warn") || !strings.Contains(out.String(), "orphan.json") {
 		t.Errorf("fragment should warn and name the file:\n%s", out.String())
@@ -273,7 +273,7 @@ func TestScannedPortPersists(t *testing.T) {
 	}
 	// -check accepts it.
 	var out strings.Builder
-	if errs := checkConfig(&out, c); errs != 0 || !strings.Contains(out.String(), "scanned port") {
+	if fatal, errs := checkConfig(&out, c); fatal+errs != 0 || !strings.Contains(out.String(), "scanned port") {
 		t.Errorf("-check on a scanning entry:\n%s", out.String())
 	}
 
@@ -380,8 +380,8 @@ func TestResolveDriver(t *testing.T) {
 	unres.Instance, unres.Source = "gone", "gone.json"
 	c.Devices = append(c.Devices, binSpec, unres)
 	var out strings.Builder
-	if errs := checkConfig(&out, c); errs != 0 {
-		t.Errorf("errors = %d:\n%s", errs, out.String())
+	if fatal, errs := checkConfig(&out, c); fatal+errs != 0 {
+		t.Errorf("fatal, errors = %d, %d:\n%s", fatal, errs, out.String())
 	}
 	o := out.String()
 	if !strings.Contains(o, "focuser/0 on port 11500") || !strings.Contains(o, "separate binary "+bin) || !strings.Contains(o, "warn") {
