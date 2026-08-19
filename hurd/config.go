@@ -1,7 +1,7 @@
 // Package hurd is the alpacahurd engine: it loads a device config, constructs
 // each enabled device through the goalpaca driver registry, and serves the
-// whole herd — per-device Alpaca servers, one shared discovery responder, and
-// the optional INDI and LX200 front-ends — in a single process.
+// whole herd — per-device Alpaca servers and one shared discovery responder —
+// in a single process.
 package hurd
 
 import (
@@ -17,13 +17,13 @@ import (
 )
 
 // Config is the hurd configuration: the devices in Devices, plus the shared
-// discovery, INDI, and LX200 front-ends. A device is enabled by appearing in the
-// list; remove it (or set "enable": false) to disable it.
+// discovery. A device is enabled by appearing in the list; remove it (or set
+// "enable": false) to disable it.
 type Config struct {
 	Discovery string `json:"discovery"` // direct | off
 
 	// Listen restricts which interfaces the hurd serves on, applied to the Alpaca
-	// servers, LX200 bridges, INDI hub, and discovery. Each entry is an interface name
+	// servers and discovery. Each entry is an interface name
 	// (e.g. "en0", "eth0", "lo") — expanding to all of its addresses, both IP stacks —
 	// or an IP literal (a bare IPv4 literal is IPv4-only). Empty (the default) binds
 	// every interface (":port") on both stacks. See resolveListen.
@@ -35,9 +35,9 @@ type Config struct {
 	// it logs once and IPv4 discovery is unaffected.
 	IPv6 *bool `json:"ipv6,omitempty"`
 
-	// Debug enables verbose per-request traffic logging for the Alpaca servers (one
-	// line per HTTP request) and the INDI hub (per-message). Defaults to false.
-	// Lifecycle logs print regardless.
+	// Debug enables verbose per-request traffic logging for the Alpaca servers
+	// (one line per HTTP request). Defaults to false. Lifecycle logs print
+	// regardless.
 	Debug bool `json:"debug,omitempty"`
 
 	// SetupPort is the TCP port of the orchestrator's own page: every device on
@@ -49,52 +49,7 @@ type Config struct {
 	// says where it landed. 0 keeps the default; -1 turns the page off.
 	SetupPort int `json:"setupPort,omitempty"`
 
-	// Indi optionally hosts a single in-process INDI server (one port, devices that
-	// opt in via "indi": true, multiplexed by device name) for INDI clients — added
-	// for PHD2. Omit or disable to leave it off.
-	Indi IndiConfig `json:"indi,omitempty"`
-
-	// LX200 optionally serves a Meade-LX200 TCP server (Stellarium/SkySafari) per
-	// mount. LX200 needs one port per mount, so enabling it assigns each mount a port
-	// from BasePort upward (a device can pin its own with "lx200Port").
-	LX200 LX200Config `json:"lx200,omitempty"`
-
 	Devices []DeviceSpec `json:"devices"`
-}
-
-// LX200Config configures the optional per-mount LX200 servers.
-type LX200Config struct {
-	Enable   bool `json:"enable,omitempty"`
-	BasePort int  `json:"basePort,omitempty"` // default 4030 when Enable is set
-
-	// ReadOnlySite makes the bridge ACK a client's site/time set commands without
-	// writing them to the mount, so an atlas can't overwrite a modeled mount's surveyed
-	// site/clock. Reads still report the mount's real values. Off by default.
-	ReadOnlySite bool `json:"readOnlySite,omitempty"`
-}
-
-// basePort returns the LX200 base port, defaulting to 4030.
-func (l LX200Config) basePort() int {
-	if l.BasePort == 0 {
-		return 4030
-	}
-	return l.BasePort
-}
-
-// IndiConfig configures the optional shared INDI server. INDI has no discovery, so
-// the port is static (conventionally 7624) and clients are pointed at host:port plus
-// a device name.
-type IndiConfig struct {
-	Enable bool `json:"enable,omitempty"`
-	Port   int  `json:"port,omitempty"` // default 7624 when Enable is set
-}
-
-// port returns the INDI port, defaulting to the conventional 7624.
-func (i IndiConfig) port() int {
-	if i.Port == 0 {
-		return 7624
-	}
-	return i.Port
 }
 
 // setupPort resolves the orchestrator page's port: the default when unset, or 0
@@ -144,6 +99,11 @@ type DeviceSpec struct {
 	// Source names the file the entry came from, for messages and the setup
 	// page's locked-field note.
 	Source string `json:"-"`
+
+	// Block is set on a spec subSpecs expanded from a multi-device entry (a
+	// driver with a MultiKey, e.g. astrocam's "cameras"): the block's array
+	// position, which is also its device number. Nil for a flat entry.
+	Block *int `json:"-"`
 }
 
 // deviceCommon are the engine-owned keys of a device entry (registry.CommonKeys).
@@ -172,29 +132,13 @@ type deviceCommon struct {
 	// otherwise disabling one entry renumbers the ones after it.
 	Device *int `json:"device,omitempty"`
 
-	// Indi opts a device into the shared INDI hub (default out, Alpaca-only). Set
-	// "indi": true to expose it over INDI.
-	Indi *bool `json:"indi,omitempty"`
-
-	// LX200Port pins this mount's LX200 server to a specific port, overriding the
-	// hurd's auto-assignment. Setting it also enables LX200 for just this mount even
-	// when the top-level "lx200" block is off.
-	LX200Port int `json:"lx200Port,omitempty"`
-
-	Aperture     float64 `json:"aperture,omitempty"`     // optics (telescopes): mm (e.g. 130)
-	ApertureArea float64 `json:"apertureArea,omitempty"` // optics: m² (default from diameter)
-	FocalLength  float64 `json:"focalLength,omitempty"`  // optics: mm (e.g. 1000)
-
-	// Guide-scope optics in mm for INDI TELESCOPE_INFO / GUIDER_*. Omitted defaults to
-	// the main scope (the OAG case). A client can also push these at runtime via the
-	// mount's setoptics Action.
-	GuiderAperture    float64 `json:"guiderAperture,omitempty"`
-	GuiderFocalLength float64 `json:"guiderFocalLength,omitempty"`
-
-	// GuideRate is the mount's guide speed as a fraction of sidereal (e.g. 0.5),
-	// reported over INDI so PHD2 can scale calibration. Defaults to 0.5 when omitted.
-	GuideRate float64 `json:"guideRate,omitempty"`
 }
+
+// The INDI and LX200 front-ends left the hurd for the driver binaries, so the
+// keys that configured them here (indi, lx200Port, the optics block, and
+// guideRate) are no longer read: registry.CommonKeys still lists them, so the
+// loose decode above ignores them in an old file and a driver's strict decode
+// never sees them.
 
 // UnmarshalJSON decodes the common fields loosely (driver-owned keys are not
 // errors here — the driver's strict Decode covers them) and keeps the whole
@@ -206,10 +150,6 @@ func (d *DeviceSpec) UnmarshalJSON(b []byte) error {
 	d.Raw = append(json.RawMessage(nil), b...)
 	return nil
 }
-
-// indiEnabled reports whether this device should join the INDI hub. Opt-in: a device
-// joins only when it sets "indi": true; the default is Alpaca-only.
-func (d DeviceSpec) indiEnabled() bool { return d.Indi != nil && *d.Indi }
 
 // enabled reports whether this device should be registered (default true).
 func (d DeviceSpec) enabled() bool { return d.Enable == nil || *d.Enable }

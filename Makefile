@@ -39,9 +39,9 @@ WS_DIRS := . \
 	../goalpaca-devices/asiair ../goalpaca-devices/ptpcam \
 	../goalpaca-devices/smpro
 
-.PHONY: all help gen workspace build tidy test install uninstall clean
+.PHONY: all help gen workspace build fat tidy test install uninstall clean
 
-all: gen build ## regenerate drivers_gen.go from hurd.conf, then build (default)
+all: build ## the bare orchestrator (default); `make fat` bundles the hurd.conf drivers
 
 help: ## list the targets
 	@echo "alpacahurd make targets:"
@@ -69,8 +69,16 @@ workspace: ## (re)write go.work over the present sibling checkouts
 	done
 	@echo "go.work written over the present siblings"
 
-build: ## build only (skip regeneration)
+# The two build flavors differ only in the fat build tag: drivers_gen.go
+# carries `//go:build fat`, so the bare build excludes it and compiles no
+# driver in — every device entry then resolves to an installed driver binary
+# under the platform supervisor. The registry-derived conveniences (-drivers,
+# -example-devices, the page's add picker) list nothing in a bare build.
+build: ## the bare orchestrator: no compiled-in drivers (separate binaries only)
 	CGO_ENABLED=$(CGO) go build -o $(BIN) .
+
+fat: gen ## bundle the hurd.conf drivers into the binary (compiled-in layout)
+	CGO_ENABLED=$(CGO) go build -tags fat -o $(BIN) .
 
 # tidy resolves every module requirement from the proxy into go.mod/go.sum, so a
 # fresh clone builds with no sibling checkouts. (`make workspace` is the alternative:

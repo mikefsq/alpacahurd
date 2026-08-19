@@ -44,8 +44,6 @@ func printExample(w io.Writer, name string) error {
 	// file; writeExampleDevicesDir seeds that directory.
 	out := "{\n" +
 		"  \"discovery\": \"direct\",\n" +
-		"  \"indi\":  { \"enable\": false, \"port\": 7624 },\n" +
-		"  \"lx200\": { \"enable\": false, \"basePort\": 4030 },\n" +
 		"  \"devices\": []\n" +
 		"}"
 	fmt.Fprintln(w, out)
@@ -136,7 +134,6 @@ func checkConfig(w io.Writer, cfg *Config) (fatal, errs int) {
 	// Device numbers are per port, assigned exactly as serve does, so -check
 	// reports the addresses the hurd will actually serve.
 	nums := map[int]*deviceNumbers{}
-	indiNames := map[string]bool{} // INDI ids must be unique on the hub
 	enabled := 0
 	for _, spec := range cfg.Devices {
 		if !spec.enabled() {
@@ -161,37 +158,37 @@ func checkConfig(w io.Writer, cfg *Config) (fatal, errs int) {
 				continue
 			}
 		}
-		drv, dev, err := buildDevice(spec)
-		if err != nil {
-			fail(spec, "%v", err)
+		// A multi-device entry (a driver with a MultiKey) checks one device per
+		// block; a flat entry is itself.
+		subs, serr := subSpecs(spec)
+		if serr != nil {
+			fail(spec, "%v", serr)
 			continue
 		}
-		if nums[spec.Port] == nil {
-			nums[spec.Port] = &deviceNumbers{}
-		}
-		num, err := nums[spec.Port].assign(spec, drv.Type)
-		if err != nil {
-			fail(spec, "%v", err)
-			continue
-		}
-
-		if spec.LX200Port != 0 && !isLiveMounter(dev) {
-			fail(spec, `sets "lx200Port" but is not a mount`)
-		}
-		if spec.indiEnabled() {
-			if !isLiveMounter(dev) && !isLiveCamera(dev) {
-				fmt.Fprintf(w, "warn   %-22s \"indi\": true but the device is not INDI-capable (ignored)\n", spec.Driver)
-			} else if name := indiName(spec, num); indiNames[name] {
-				fail(spec, "INDI name %q is already taken (INDI ids must be unique; set \"name\")", name)
-			} else {
-				indiNames[name] = true
+		for _, sub := range subs {
+			if !sub.enabled() {
+				fmt.Fprintf(w, "skip   %-22s device %d disabled\n", sub.Driver, *sub.Block)
+				continue
 			}
-		}
+			drv, dev, err := buildDevice(sub)
+			if err != nil {
+				fail(sub, "%v", err)
+				continue
+			}
+			if nums[sub.Port] == nil {
+				nums[sub.Port] = &deviceNumbers{}
+			}
+			num, err := nums[sub.Port].assign(sub, drv.Type)
+			if err != nil {
+				fail(sub, "%v", err)
+				continue
+			}
 
-		if spec.Port == 0 {
-			fmt.Fprintf(w, "ok     %-22s %s/%d on a scanned port (from %d; recorded in the state file at first start)  %q\n", spec.Driver, drv.Type, num, portScanBase, dev.Name())
-		} else {
-			fmt.Fprintf(w, "ok     %-22s %s/%d on port %d  %q\n", spec.Driver, drv.Type, num, spec.Port, dev.Name())
+			if sub.Port == 0 {
+				fmt.Fprintf(w, "ok     %-22s %s/%d on a scanned port (from %d; recorded in the state file at first start)  %q\n", sub.Driver, drv.Type, num, portScanBase, dev.Name())
+			} else {
+				fmt.Fprintf(w, "ok     %-22s %s/%d on port %d  %q\n", sub.Driver, drv.Type, num, sub.Port, dev.Name())
+			}
 		}
 	}
 

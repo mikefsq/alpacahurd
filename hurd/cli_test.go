@@ -116,19 +116,15 @@ func TestCheckConfigFindsProblems(t *testing.T) {
 		parseSpec(t, `{"driver":"sim-focuser"}`),                               // missing port
 		parseSpec(t, `{"driver":"nope","port":11201}`),                         // unknown driver
 		parseSpec(t, `{"driver":"asieaf","port":11202,"serail":"x"}`),          // driver-key typo
-		parseSpec(t, `{"driver":"sim-focuser","port":11203,"lx200Port":4040}`), // lx200Port on a non-mount
 		// Sharing a port is legal (this is focuser/1 there), but pinning a number an
 		// earlier entry already took is not.
 		parseSpec(t, `{"driver":"sim-focuser","port":11200}`),
 		parseSpec(t, `{"driver":"sim-focuser","port":11200,"device":0}`),
 		parseSpec(t, `{"driver":"sim-focuser","port":11200,"device":-1}`),
-		// Two INDI mounts falling back to the same explicit name collide on the hub.
-		parseSpec(t, `{"driver":"sim-telescope","port":11204,"name":"M","indi":true}`),
-		parseSpec(t, `{"driver":"sim-telescope","port":11205,"name":"M","indi":true}`),
 	}}
 	var out bytes.Buffer
 	fatal, errs := checkConfig(&out, cfg)
-	const want = 7 // missing port, unknown, typo, lx200Port, pinned dup, negative, INDI name
+	const want = 5 // missing port, unknown, typo, pinned dup, negative
 	if errs != want {
 		t.Fatalf("checkConfig = %d errors, want %d:\n%s", errs, want, out.String())
 	}
@@ -143,7 +139,7 @@ func TestCheckConfigFindsProblems(t *testing.T) {
 		t.Errorf("entries sharing a port should number 0,1:\n%s", out.String())
 	}
 	for _, needle := range []string{"disabled", `"port" is required`, "is already taken by another",
-		"is negative", "unknown driver", "serail", "lx200Port", "already taken"} {
+		"is negative", "unknown driver", "serail", "already taken"} {
 		if !strings.Contains(out.String(), needle) {
 			t.Errorf("checkConfig output missing %q:\n%s", needle, out.String())
 		}
@@ -168,17 +164,18 @@ func TestCheckConfigFatalListen(t *testing.T) {
 	}
 }
 
-// TestCheckConfigWarnsIndiIncapable: "indi": true on a device that can't join
-// the hub is a warning, not an error (the herd still runs; the flag is ignored).
-func TestCheckConfigWarnsIndiIncapable(t *testing.T) {
+// TestCheckConfigIgnoresFrontEndKeys: the keys of the removed INDI and LX200
+// front-ends ("indi", "lx200Port") stay common keys, so an old entry carrying
+// them checks clean — they never reach the driver's strict decode.
+func TestCheckConfigIgnoresFrontEndKeys(t *testing.T) {
 	cfg := &Config{Devices: []DeviceSpec{
-		parseSpec(t, `{"driver":"sim-focuser","port":11200,"indi":true}`),
+		parseSpec(t, `{"driver":"sim-focuser","port":11200,"indi":true,"lx200Port":4040}`),
 	}}
 	var out bytes.Buffer
 	if fatal, errs := checkConfig(&out, cfg); fatal+errs != 0 {
-		t.Fatalf("INDI-incapable device should warn, not error:\n%s", out.String())
+		t.Fatalf("front-end keys should be ignored, not errors:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "not INDI-capable") {
-		t.Errorf("expected an INDI-capability warning:\n%s", out.String())
+	if !strings.Contains(out.String(), "focuser/0 on port 11200") {
+		t.Errorf("the entry should check ok:\n%s", out.String())
 	}
 }

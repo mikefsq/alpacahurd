@@ -1,7 +1,6 @@
 {
   "discovery": "direct",
 
-  "lx200": { "enable": true, "basePort": 4030 },
 
   "devices": [
     { "driver": "sim-telescope",           "port": 11110, "name": "Sim Mount",

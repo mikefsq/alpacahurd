@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	alpacadev "github.com/mikefsq/goalpaca/server"
@@ -48,30 +49,34 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	var row *orchRow
+	// A multi-device entry (subSpecs) has one row per block, sharing the
+	// instance, the file, and the switch; collect them all.
+	var idxs []int
 	for i := range o.rows {
 		if o.rows[i].spec.Instance == inst {
-			row = &o.rows[i]
-			break
+			idxs = append(idxs, i)
 		}
 	}
-	if row == nil {
+	if len(idxs) == 0 {
 		return "", fmt.Errorf("no device %q", inst)
 	}
+	source := o.rows[idxs[0]].spec.Source
 	if err := writeStateEnable(inst, on); err != nil {
 		return "", fmt.Errorf("record the switch: %w", err)
 	}
-	cur, err := loadDeviceFile(row.spec.Source, stateDevicesDir())
+	cur, err := loadDeviceFile(source, stateDevicesDir())
 	if err != nil {
 		return "", err
 	}
-	row.spec = cur
-	row.res = resolveDriver(cur)
-	row.skipped = ""
+	res := resolveDriver(cur)
 
 	if !on {
-		switch {
-		case row.inProcess:
+		closed, port := 0, 0
+		for _, i := range idxs {
+			row := &o.rows[i]
+			if !row.inProcess {
+				continue
+			}
 			srv := o.byPort[row.srvKey]
 			if err := srv.Unregister(row.devType, row.num); err != nil {
 				return "", err
@@ -80,9 +85,19 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 				n.release(row.devType, row.num)
 			}
 			log.Printf("alpacahurd: %s disabled from the page; %s %d on :%d closed", inst, row.devType, row.num, row.port)
-			row.inProcess, row.reloadable, row.num, row.deviceName = false, false, 0, ""
-			return fmt.Sprintf("%s disabled: hardware closed and the device removed from port %d", inst, row.port), nil
-		case row.res.kind == installedBinary:
+			port = row.port
+			closed++
+		}
+		if closed > 0 {
+			// The entry collapses back to one disabled row.
+			o.replaceRows(idxs, []orchRow{{spec: cur, res: res, port: cur.Port}})
+			if closed == 1 {
+				return fmt.Sprintf("%s disabled: hardware closed and the device removed from port %d", inst, port), nil
+			}
+			return fmt.Sprintf("%s disabled: hardware closed and %d devices removed from port %d", inst, closed, port), nil
+		}
+		o.replaceRows(idxs, []orchRow{{spec: cur, res: res, port: cur.Port}})
+		if res.kind == installedBinary {
 			if _, none := o.sup.(noSupervisor); none {
 				return fmt.Sprintf("%s disabled in its state file; no supervisor here to stop it", inst), nil
 			}
@@ -102,24 +117,47 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 	}
 
 	// Enable.
-	if row.inProcess {
-		return fmt.Sprintf("%s is already running", inst), nil
+	for _, i := range idxs {
+		if o.rows[i].inProcess {
+			return fmt.Sprintf("%s is already running", inst), nil
+		}
 	}
-	switch row.res.kind {
+	switch res.kind {
 	case compiledIn:
-		msg, err := o.startInProcess(row)
+		subs, err := subSpecs(cur)
 		if err != nil {
-			// Nothing runs, so the switch goes back to off: an entry recorded
-			// enabled that cannot be built would fail the next start.
 			_ = writeStateEnable(inst, false)
-			if again, lerr := loadDeviceFile(row.spec.Source, stateDevicesDir()); lerr == nil {
-				row.spec = again
-			}
-			row.skipped = err.Error()
+			o.replaceRows(idxs, []orchRow{{spec: cur, res: res, port: cur.Port, skipped: err.Error()}})
 			return "", fmt.Errorf("%s not enabled: %w", inst, err)
 		}
-		return msg, nil
+		var newRows []orchRow
+		var msgs []string
+		for _, sub := range subs {
+			if !sub.enabled() {
+				continue // a disabled block: no device at its number
+			}
+			row := orchRow{spec: sub, res: res, port: sub.Port}
+			msg, err := o.startInProcess(&row)
+			if err != nil {
+				// The switch goes back to off: an entry recorded enabled that
+				// cannot be built would fail the next start. Devices started
+				// for earlier blocks keep serving until then.
+				_ = writeStateEnable(inst, false)
+				row.skipped = err.Error()
+				o.replaceRows(idxs, append(newRows, row))
+				return "", fmt.Errorf("%s not enabled: %w", inst, err)
+			}
+			newRows = append(newRows, row)
+			msgs = append(msgs, msg)
+		}
+		if len(newRows) == 0 {
+			o.replaceRows(idxs, []orchRow{{spec: cur, res: res, port: cur.Port, skipped: "every device block is disabled"}})
+			return fmt.Sprintf("%s enabled, but every device block in its file is disabled", inst), nil
+		}
+		o.replaceRows(idxs, newRows)
+		return strings.Join(msgs, "; "), nil
 	case installedBinary:
+		o.replaceRows(idxs, []orchRow{{spec: cur, res: res, port: cur.Port}})
 		if _, none := o.sup.(noSupervisor); none {
 			return fmt.Sprintf("%s enabled in its state file; no supervisor here to start it (alpacahurd -launch %s runs it by hand)", inst, inst), nil
 		}
@@ -135,8 +173,27 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 		return fmt.Sprintf("%s enabled: started under %s and on at boot", inst, o.sup.Name()), nil
 	}
 	_ = writeStateEnable(inst, false)
-	row.skipped = "driver not compiled in and no binary found"
+	o.replaceRows(idxs, []orchRow{{spec: cur, res: res, port: cur.Port, skipped: "driver not compiled in and no binary found"}})
 	return "", fmt.Errorf("%s not enabled: its driver %q is not compiled in and no binary was found", inst, cur.Driver)
+}
+
+// replaceRows swaps the rows at idxs (ascending, as collected by instance) for
+// rows, keeping the entry's place in the table. Called with o.mu held.
+func (o *orchestrator) replaceRows(idxs []int, rows []orchRow) {
+	drop := make(map[int]bool, len(idxs))
+	for _, i := range idxs {
+		drop[i] = true
+	}
+	out := make([]orchRow, 0, len(o.rows)-len(idxs)+len(rows))
+	for i := range o.rows {
+		if i == idxs[0] {
+			out = append(out, rows...)
+		}
+		if !drop[i] {
+			out = append(out, o.rows[i])
+		}
+	}
+	o.rows = out
 }
 
 // startInProcess constructs row's device and serves it: on the running server
@@ -188,18 +245,13 @@ func (o *orchestrator) startInProcess(row *orchRow) (string, error) {
 	if err := attachSetupForm(srv, drv, dev, num, spec); err != nil {
 		return "", err
 	}
-	note := ""
-	if !heldByFrontEnd(o.cfg, spec, dev) {
-		_ = srv.SetReloader(drv.Type, num, reloaderFor(spec, nil))
-		row.reloadable = true
-	} else {
-		note = "; its INDI or LX200 front-end attaches at the next restart"
-	}
+	_ = srv.SetReloader(drv.Type, num, reloaderFor(spec))
+	row.reloadable = true
 	row.inProcess, row.num, row.port, row.srvKey = true, num, srv.Port(), key
 	row.deviceName, row.devType = dev.Name(), drv.Type
 	persistBoundPorts([]boundEntry{{spec: spec, port: srv.Port()}})
 	log.Printf("alpacahurd: %s enabled from the page; %s %d on :%d", spec.Instance, drv.Type, num, srv.Port())
-	return fmt.Sprintf("%s enabled: serving as %s %d on port %d%s", spec.Instance, drv.Type, num, srv.Port(), note), nil
+	return fmt.Sprintf("%s enabled: serving as %s %d on port %d", spec.Instance, drv.Type, num, srv.Port()), nil
 }
 
 // enableTimeout bounds a page enable or disable, hardware open included.

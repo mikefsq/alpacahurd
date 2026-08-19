@@ -3,6 +3,13 @@
 // Each blank import compiles a driver in: the package registers itself with
 // github.com/mikefsq/goalpaca/registry in init(). Edit hurd.conf and run
 // `make gen` to change the set.
+//
+// The fat tag selects the bundled build (`make fat`): without it (`make
+// build`) this file is excluded, no driver is compiled in, and every device
+// entry resolves to an installed driver binary.
+
+//go:build fat
+
 package main
 
 import (

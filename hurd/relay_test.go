@@ -174,7 +174,7 @@ func TestReloaderRereadsDeviceFile(t *testing.T) {
 	if dev.Name() != "Before" {
 		t.Fatalf("built %q", dev.Name())
 	}
-	reload := reloaderFor(spec, nil)
+	reload := reloaderFor(spec)
 
 	writeFile(t, devFile, `{"driver":"sim-camera","port":11999,"name":"After"}`)
 	dev2, sc, err := reload(context.Background())

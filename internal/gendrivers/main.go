@@ -59,6 +59,10 @@ func main() {
 	b.WriteString("//\n// Each blank import compiles a driver in: the package registers itself with\n")
 	b.WriteString("// github.com/mikefsq/goalpaca/registry in init(). Edit hurd.conf and run\n")
 	b.WriteString("// `make gen` to change the set.\n")
+	b.WriteString("//\n// The fat tag selects the bundled build (`make fat`): without it (`make\n")
+	b.WriteString("// build`) this file is excluded, no driver is compiled in, and every device\n")
+	b.WriteString("// entry resolves to an installed driver binary.\n\n")
+	b.WriteString("//go:build fat\n\n")
 	b.WriteString("package main\n\nimport (\n")
 	for _, p := range paths {
 		fmt.Fprintf(&b, "\t_ %q\n", p)

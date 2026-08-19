@@ -15,8 +15,6 @@ every device over the network. Hotplug is handled automatically.
 - **One discovery responder.** Clients auto-discover every device via UDP 32227
   (IPv4 broadcast + IPv6 multicast). Devices running as separate binaries, on
   this host or another, register with it and are discovered through it too.
-- **LX200 front-end included.** Each mount object can serve a Meade-LX200 over
-  TCP for Stellarium and SkySafari.
 - **Browser setup pages.** Every device has a configuration page at
   `/setup/v1/{type}/{n}/setup`, generated from the driver's config struct.
   Keys the config file names render locked; what the page changes persists to
@@ -152,7 +150,7 @@ is not WinUSB-compatible).
 ## Configure devices
 
 Which devices run is declared in JSON. The server config `hurd.json` holds the
-shared blocks (`discovery`, `listen`, `indi`, `lx200`), and a `devices.d`
+shared blocks (`discovery`, `listen`), and a `devices.d`
 directory beside it holds one file per device. Pass `-config <path>`
 explicitly, or let it search (first found wins): `./hurd.json`, then the
 platform config directory (`~/.config/alpacahurd` for a user,
@@ -212,8 +210,7 @@ file and its state overlay, its hardware closed and reopened, and its port
 kept, while the other devices carry on. The Reload button on a device's setup
 page and on the orchestrator page (`http://host:32227/setup`) does it per
 device; `systemctl reload alpacahurd` or `kill -HUP` does it for the whole
-herd. A port change or a driver change still needs a restart, and so does a
-mount the INDI hub or an LX200 bridge serves.
+herd. A port change or a driver change still needs a restart.
 
 Enable and disable act without a restart too, from the orchestrator page: a
 disabled entry is constructed and served on its port (a new server is started
@@ -256,7 +253,7 @@ alpacahurd -example-devices /etc/alpacahurd/devices.d   # seed one disabled file
 alpacahurd -check                          # validate the config without touching hardware
 ```
 
-An example server config (LX200, optics, weather to mount feed) is in
+An example server config is in
 [`config/hurd.example.json`](config/hurd.example.json). Device files are not
 kept here: each driver carries its own example and schema in goalpaca-devices,
 and `alpacahurd -example-devices <dir>` writes one commented file per compiled-in
@@ -297,15 +294,6 @@ so a driver moves out of process by leaving `hurd.conf`. Without a supervisor
 (a hand run, or a platform without one) such entries are reported and skipped;
 `alpacahurd -launch <instance>` runs one from a console.
 
-## LX200 front-end (Stellarium, SkySafari)
-
-Each mount object can also serve a Meade-LX200 TCP server. Set
-`"lx200": { "enable": true, "basePort": 4030 }`. LX200 cannot multiplex, so every
-mount gets its own port counting up from `basePort`, and a mount can pin one with
-`"lx200Port": N` (which also enables LX200 for that mount alone).
-`"readOnlySite": true` prevents an atlas from overwriting a modeled mount's
-surveyed site and clock.
-
 ## Simulated devices
 
 The `sim` module provides a full set of `sim-*` drivers. It is listed in 
@@ -320,7 +308,7 @@ no-hardware herd for verifying an install and developing clients. Comment the
 
 ## Restricting interfaces, IPv6, logging
 
-- `"listen": ["lo", "eth0"]` restricts every server (Alpaca, LX200, discovery)
+- `"listen": ["lo", "eth0"]` restricts every server (Alpaca, discovery)
   to those interfaces. An interface name serves both IP stacks; a bare IPv4
   literal is IPv4-only. Omit to bind everything.
 - `"ipv6": false` turns off the IPv6 discovery responder (multicast group

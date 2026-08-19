@@ -13,40 +13,15 @@ import (
 
 	"github.com/mikefsq/goalpaca/registry"
 	alpacadev "github.com/mikefsq/goalpaca/server"
-	indiccd "github.com/mikefsq/goindi/ccd"
-	indimount "github.com/mikefsq/goindi/mount"
-	indiserver "github.com/mikefsq/goindi/server"
-	"github.com/mikefsq/lx200"
-	"github.com/mikefsq/lx200/bridge"
 )
 
 const version = "v0.1.0"
 
-// liveMounter is implemented by mount drivers; LiveMount returns the connected
-// lx200.Mount that the LX200 bridge and INDI server consume.
-type liveMounter interface {
-	LiveMount() (lx200.Mount, error)
-}
-
-// liveCamera is implemented by camera drivers that drive the INDI CCD device;
-// LiveCamera returns the frame source.
-type liveCamera interface {
-	LiveCamera() (indiccd.Camera, error)
-}
-
-// opticsConfigurable is implemented by mount drivers that accept a shared optics
-// holder, so the INDI front-end reports what an Alpaca setoptics Action sets.
-type opticsConfigurable interface {
-	UseOptics(alpacadev.OpticsStore)
-}
-
-// built pairs a configured device spec with the constructed driver, so the extra
-// front-ends (INDI hub, LX200 bridge) can be wired onto the same device object.
+// built pairs a configured device spec with the constructed driver.
 type built struct {
-	spec   DeviceSpec
-	dev    alpacadev.Device
-	num    int           // ASCOM device number on its port
-	optics *opticsHolder // shared optics holder, when the driver accepts one
+	spec DeviceSpec
+	dev  alpacadev.Device
+	num  int // ASCOM device number on its port
 }
 
 // Main is the alpacahurd entry point: it parses flags and either serves the
@@ -126,7 +101,7 @@ func Main() {
 }
 
 // serve runs the whole herd until SIGINT/SIGTERM: one Alpaca server per enabled
-// device, the shared discovery responder, and the INDI/LX200 front-ends.
+// device and the shared discovery responder.
 func serve(cfg *Config, cfgPath string) {
 	log.Printf("alpacahurd: config %s", cfgPath)
 
@@ -199,6 +174,14 @@ func serve(cfg *Config, cfgPath string) {
 			orch.rows = append(orch.rows, orchRow{spec: spec, res: res, skipped: "driver not compiled in and no binary found"})
 			continue
 		}
+		// A multi-device entry (a driver with a MultiKey, e.g. astrocam's
+		// "cameras") expands to one spec per block; a flat entry is itself.
+		subs, serr := subSpecs(spec)
+		if serr != nil {
+			log.Printf("alpacahurd: %s: device %q: %v; skipping the entry", spec.Source, spec.Driver, serr)
+			orch.rows = append(orch.rows, orchRow{spec: spec, res: res, port: spec.Port, skipped: serr.Error()})
+			continue
+		}
 		// Entries naming a port share a server per port; an entry with no port
 		// gets its own server that scans, keyed by instance so it never shares.
 		key := spec.Port
@@ -220,34 +203,31 @@ func serve(cfg *Config, cfgPath string) {
 				orch.scanCount = len(scanned)
 			}
 		}
-		dev, num, err := registerDevice(srv, spec, nums[key])
-		if err != nil {
-			// A device that cannot be built (a missing key, a bad value) is
-			// reported and skipped, not fatal: the rest of the herd serves,
-			// and the page shows the error beside a disable switch.
-			log.Printf("alpacahurd: %s: device %q: %v; skipping the entry", spec.Source, spec.Driver, err)
-			orch.rows = append(orch.rows, orchRow{spec: spec, res: res, port: spec.Port, skipped: err.Error()})
-			continue
-		}
-		b := built{spec: spec, dev: dev, num: num}
-		orch.rows = append(orch.rows, orchRow{spec: spec, res: res, num: num, inProcess: true, deviceName: dev.Name(), devType: deviceTypeOf(spec, dev), srvKey: key})
-		// Inject a shared optics holder so the INDI front-end's TELESCOPE_INFO reports
-		// whatever an Alpaca setoptics Action sets.
-		if oc, ok := dev.(opticsConfigurable); ok {
-			b.optics = newOpticsHolder(spec.Aperture, spec.ApertureArea, spec.FocalLength,
-				spec.GuiderAperture, spec.GuiderFocalLength)
-			oc.UseOptics(b.optics)
-		}
-		// Reload in place, from the setup page or the orchestrator page,
-		// unless an INDI or LX200 front-end holds the device object: those
-		// wrap it at start and would keep driving the old one.
-		if !heldByFrontEnd(cfg, spec, dev) {
-			if err := srv.SetReloader(deviceTypeOf(spec, dev), num, reloaderFor(spec, b.optics)); err != nil {
-				log.Fatalf("alpacahurd: device %q: %v", spec.Driver, err)
+		for _, sub := range subs {
+			if !sub.enabled() {
+				// A disabled block: no device at its number, no row; the
+				// file's own switch covers the whole entry.
+				log.Printf("alpacahurd: skipping %s device %d (disabled)", spec.Instance, *sub.Block)
+				continue
+			}
+			dev, num, err := registerDevice(srv, sub, nums[key])
+			if err != nil {
+				// A device that cannot be built (a missing key, a bad value) is
+				// reported and skipped, not fatal: the rest of the herd serves,
+				// and the page shows the error beside a disable switch.
+				log.Printf("alpacahurd: %s: device %q: %v; skipping the entry", sub.Source, sub.Driver, err)
+				orch.rows = append(orch.rows, orchRow{spec: sub, res: res, port: sub.Port, skipped: err.Error()})
+				continue
+			}
+			b := built{spec: sub, dev: dev, num: num}
+			orch.rows = append(orch.rows, orchRow{spec: sub, res: res, num: num, inProcess: true, deviceName: dev.Name(), devType: deviceTypeOf(sub, dev), srvKey: key})
+			// Reload in place, from the setup page or the orchestrator page.
+			if err := srv.SetReloader(deviceTypeOf(sub, dev), num, reloaderFor(sub)); err != nil {
+				log.Fatalf("alpacahurd: device %q: %v", sub.Driver, err)
 			}
 			orch.rows[len(orch.rows)-1].reloadable = true
+			devices = append(devices, b)
 		}
-		devices = append(devices, b)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -416,8 +396,6 @@ func serve(cfg *Config, cfgPath string) {
 		}
 	})
 
-	startINDI(ctx, cfg, devices, listenAddrs)
-	startBridges(ctx, cfg, devices, listenAddrs)
 	log.Printf("alpacahurd: serving %d device(s) on %d port(s) (Ctrl-C to stop)", len(devices), len(servers))
 
 	select {
@@ -428,129 +406,6 @@ func serve(cfg *Config, cfgPath string) {
 		}
 	}
 	log.Printf("alpacahurd: shut down")
-}
-
-// startINDI hosts a single in-process INDI server on one port (default 7624) with
-// every INDI-capable device, multiplexed by device name. Each device drives the same
-// object the Alpaca server does. INDI has no discovery, so device names must be
-// unique; a collision is a startup error.
-func startINDI(ctx context.Context, cfg *Config, devices []built, listenAddrs []string) {
-	if !cfg.Indi.Enable {
-		return
-	}
-	indiAddrs := listenAddrsFor(cfg.Indi.port(), listenAddrs)
-	hub := indiserver.New(indiAddrs[0],
-		indiserver.WithLogger(log.Printf),
-		indiserver.WithListenAddrs(indiAddrs...),
-		indiserver.WithDebug(cfg.Debug))
-	added := 0
-	for _, b := range devices {
-		if !b.spec.indiEnabled() {
-			continue
-		}
-		name := indiName(b.spec, b.num)
-		var dev indiserver.Device
-		switch {
-		case isLiveMounter(b.dev):
-			var opts []indimount.Option
-			if b.optics != nil {
-				opts = append(opts, indimount.WithOptics(b.optics))
-			}
-			rate := b.spec.GuideRate
-			if rate == 0 {
-				rate = 0.5
-			}
-			opts = append(opts, indimount.WithGuideRate(rate))
-			dev = indimount.New(name, b.dev.(liveMounter).LiveMount, opts...)
-		case isLiveCamera(b.dev):
-			dev = indiccd.New(name, b.dev.(liveCamera).LiveCamera)
-		default:
-			continue // not an INDI-capable device
-		}
-		if err := hub.AddDevice(dev); err != nil {
-			log.Fatalf("alpacahurd: indi: %v", err)
-		}
-		added++
-	}
-	if added == 0 {
-		return
-	}
-	go func() {
-		log.Printf("alpacahurd: INDI server on %v for %d device(s)", indiAddrs, added)
-		if err := hub.Serve(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("alpacahurd: indi: %v", err)
-		}
-	}()
-}
-
-// startBridges serves a Meade-LX200 TCP server (Stellarium/SkySafari) per mount.
-// LX200 can't multiplex, so each mount needs its own port: when the top-level
-// "lx200" block is enabled every mount gets one from BasePort upward; a mount can pin
-// its own with "lx200Port", which also enables it on its own.
-func startBridges(ctx context.Context, cfg *Config, devices []built, listenAddrs []string) {
-	next := cfg.LX200.basePort()
-	for _, b := range devices {
-		lm, ok := b.dev.(liveMounter)
-		if !ok {
-			if b.spec.LX200Port != 0 {
-				log.Fatalf("alpacahurd: %q sets \"lx200Port\" but is not a mount", b.spec.Driver)
-			}
-			continue
-		}
-		port := b.spec.LX200Port // explicit per-mount override
-		if port == 0 {
-			if !cfg.LX200.Enable {
-				continue
-			}
-			port = next
-			next++
-		}
-		opts := []bridge.Option{bridge.WithLogger(log.Printf)}
-		if cfg.LX200.ReadOnlySite {
-			opts = append(opts, bridge.WithReadOnlySite())
-		}
-		// Stateless over LiveMount, so bind one server per listen address.
-		for _, addr := range listenAddrsFor(port, listenAddrs) {
-			srv := bridge.New(addr, lm.LiveMount, opts...)
-			a, driver := addr, b.spec.Driver
-			go func() {
-				log.Printf("alpacahurd: LX200 bridge on %s for %s", a, driver)
-				if err := srv.Serve(ctx); err != nil && ctx.Err() == nil {
-					log.Printf("alpacahurd: lx200 bridge: %v", err)
-				}
-			}()
-		}
-	}
-}
-
-// heldByFrontEnd reports whether the INDI hub or an LX200 bridge will wrap dev
-// for the process lifetime, which rules out reloading it in place.
-func heldByFrontEnd(cfg *Config, spec DeviceSpec, dev alpacadev.Device) bool {
-	if cfg.Indi.Enable && spec.indiEnabled() && (isLiveMounter(dev) || isLiveCamera(dev)) {
-		return true
-	}
-	if isLiveMounter(dev) && (spec.LX200Port != 0 || cfg.LX200.Enable) {
-		return true
-	}
-	return false
-}
-
-func isLiveMounter(d alpacadev.Device) bool { _, ok := d.(liveMounter); return ok }
-func isLiveCamera(d alpacadev.Device) bool  { _, ok := d.(liveCamera); return ok }
-
-// indiName is the INDI device id clients select by: the configured name, or a
-// fallback derived from the driver and its Alpaca address. Device 0 is named for
-// the port alone, so sharing a port never renames an existing device; the
-// entries beside it take the device number too. Give INDI devices an explicit
-// "name" — that is what PHD2 shows.
-func indiName(spec DeviceSpec, num int) string {
-	if spec.Name != "" {
-		return spec.Name
-	}
-	if num == 0 {
-		return fmt.Sprintf("%s-%d", spec.Driver, spec.Port)
-	}
-	return fmt.Sprintf("%s-%d-%d", spec.Driver, spec.Port, num)
 }
 
 // nameServers gives each server hosting exactly one in-process device that

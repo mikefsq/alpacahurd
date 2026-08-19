@@ -2,9 +2,5 @@
   "discovery": "direct",
   "listen": [
     "en0"
-  ],
-  "lx200": {
-    "enable": true,
-    "basePort": 4030
-  }
+  ]
 }

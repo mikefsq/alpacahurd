@@ -5,11 +5,66 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/mikefsq/goalpaca/registry"
 	alpacadev "github.com/mikefsq/goalpaca/server"
 )
+
+// subSpecs expands a multi-device entry into one spec per block of its
+// driver's MultiKey array (astrocam's "cameras"): the block body becomes the
+// sub-entry's Raw, the block's position is its pinned device number, and a
+// block's "name" and "enable" are its own. An entry without the key — the
+// flat one-device form — is returned as itself, so both file forms stay
+// valid, and a driver that is not compiled in is too (a separate binary reads
+// the whole file itself). A MultiKey entry with neither blocks nor flat
+// driver keys defaults to two empty blocks, the driver's documented default.
+func subSpecs(spec DeviceSpec) ([]DeviceSpec, error) {
+	drv, ok := registry.Lookup(spec.Driver)
+	if !ok || drv.MultiKey == "" {
+		return []DeviceSpec{spec}, nil
+	}
+	var m map[string]json.RawMessage
+	_ = json.Unmarshal(spec.Raw, &m)
+	blocksRaw, has := m[drv.MultiKey]
+	var raws []json.RawMessage
+	if has {
+		if err := json.Unmarshal(blocksRaw, &raws); err != nil {
+			return nil, fmt.Errorf("%q: %w", drv.MultiKey, err)
+		}
+	} else if len(pinnedKeys(spec.Raw)) > 0 {
+		return []DeviceSpec{spec}, nil
+	}
+	if len(raws) == 0 {
+		raws = []json.RawMessage{json.RawMessage("{}"), json.RawMessage("{}")}
+	}
+	subs := make([]DeviceSpec, 0, len(raws))
+	for i, r := range raws {
+		var b struct {
+			Name   string `json:"name"`
+			Enable *bool  `json:"enable"`
+		}
+		if err := json.Unmarshal(r, &b); err != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", drv.MultiKey, i, err)
+		}
+		sub := spec
+		sub.Raw = append(json.RawMessage(nil), r...)
+		sub.Name = b.Name
+		num, block := i, i
+		sub.Device, sub.Block = &num, &block
+		sub.Enable = nil
+		if !spec.enabled() || (b.Enable != nil && !*b.Enable) {
+			off := false
+			sub.Enable = &off
+		}
+		// The block's driver keys are the admin's; setupFormFor re-derives
+		// the pinned set from the block itself.
+		sub.Pinned = nil
+		subs = append(subs, sub)
+	}
+	return subs, nil
+}
 
 // buildDevice constructs the device named by spec.Driver through the driver
 // registry. Construction touches no hardware; the device's hardware loop is
@@ -26,7 +81,11 @@ func buildDevice(spec DeviceSpec) (registry.Driver, alpacadev.Device, error) {
 		return registry.Driver{}, nil, fmt.Errorf("unknown driver %q — not compiled into this binary "+
 			"(alpacahurd -drivers lists what is; add its module to hurd.conf and rebuild)", spec.Driver)
 	}
-	dev, err := drv.New(registry.Spec{Driver: drv.Name, Name: spec.Name, Instance: spec.Instance, Raw: spec.Raw})
+	devNum := 0
+	if spec.Device != nil {
+		devNum = *spec.Device
+	}
+	dev, err := drv.New(registry.Spec{Driver: drv.Name, Name: spec.Name, Instance: spec.Instance, Raw: spec.Raw, Device: devNum})
 	if err != nil {
 		return registry.Driver{}, nil, err
 	}
@@ -118,10 +177,17 @@ func attachSetupForm(srv *alpacadev.Server, drv registry.Driver, dev alpacadev.D
 	// A devices.d entry persists setup-page changes to its own state file, the
 	// one the overlay reads back at the next start. An inline entry has no
 	// instance name and keeps the server's default path under the state dir.
-	// The path goes first: on a running server RegisterConfigurable applies
-	// the persisted settings at once, from the key set by then.
+	// The blocks of a multi-device entry share the instance, so each block
+	// past the first gets its own file, suffixed by position (the same layout
+	// the standalone binary keeps). The path goes first: on a running server
+	// RegisterConfigurable applies the persisted settings at once, from the
+	// key set by then.
 	if spec.Instance != "" {
-		if err := srv.SettingsPath(drv.Type, num, filepath.Join(stateDevicesDir(), spec.Instance+".json")); err != nil {
+		stem := spec.Instance
+		if spec.Block != nil && *spec.Block > 0 {
+			stem += "." + strconv.Itoa(*spec.Block)
+		}
+		if err := srv.SettingsPath(drv.Type, num, filepath.Join(stateDevicesDir(), stem+".json")); err != nil {
 			return err
 		}
 	}
@@ -157,13 +223,12 @@ func setupFormFor(drv registry.Driver, dev alpacadev.Device, spec DeviceSpec) (a
 // entry's device file with its state overlay (an inline entry has no file of
 // its own and is rebuilt from the entry as loaded), constructs the device
 // again through the same registry driver, and rebuilds its setup form. The
-// server closes the old hardware and opens the new. optics, when the entry has
-// a shared holder, is injected again so the INDI front-end keeps reading it.
+// server closes the old hardware and opens the new.
 //
 // The entry has to still name the same driver and be enabled; a change of
 // driver or a disabled entry is a restart matter, since the device's type and
 // number are fixed for the server's lifetime.
-func reloaderFor(spec DeviceSpec, optics *opticsHolder) alpacadev.Reloader {
+func reloaderFor(spec DeviceSpec) alpacadev.Reloader {
 	return func(context.Context) (alpacadev.Device, alpacadev.Configurable, error) {
 		cur := spec
 		if spec.Instance != "" && spec.Source != "" {
@@ -172,6 +237,18 @@ func reloaderFor(spec DeviceSpec, optics *opticsHolder) alpacadev.Reloader {
 				return nil, nil, err
 			}
 			cur = fresh
+			if spec.Block != nil {
+				// The device is one block of a multi-device entry: re-expand
+				// and take the block at the same position.
+				subs, err := subSpecs(fresh)
+				if err != nil {
+					return nil, nil, err
+				}
+				if *spec.Block >= len(subs) || subs[*spec.Block].Block == nil {
+					return nil, nil, fmt.Errorf("%s no longer has block %d; restart alpacahurd to remove the device", spec.Source, *spec.Block)
+				}
+				cur = subs[*spec.Block]
+			}
 		}
 		if !strings.EqualFold(cur.Driver, spec.Driver) {
 			return nil, nil, fmt.Errorf("%s now names driver %q, was %q; restart alpacahurd to change a device's driver", spec.Source, cur.Driver, spec.Driver)
@@ -186,11 +263,6 @@ func reloaderFor(spec DeviceSpec, optics *opticsHolder) alpacadev.Reloader {
 		sc, err := setupFormFor(drv, dev, cur)
 		if err != nil {
 			return nil, nil, err
-		}
-		if optics != nil {
-			if oc, ok := dev.(opticsConfigurable); ok {
-				oc.UseOptics(optics)
-			}
 		}
 		return dev, sc, nil
 	}

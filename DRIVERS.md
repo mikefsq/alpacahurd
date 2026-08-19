@@ -98,6 +98,23 @@ The rules:
   enumeration index where the hardware allows, and documents both in the
   example when it supports both.
 
+### Platform-specific drivers
+
+A driver whose hardware exists only on some platforms declares that in its own
+package with Go build constraints, not in `hurd.conf`: the registration file
+carries the constraint (`hurd_linux.go`, or a `//go:build` line for a
+combination), and the rest of the package keeps at least one unconstrained
+file so a blank import compiles everywhere. `hurd.conf` then stays
+platform-neutral: the fat build compiles the same list on every platform, and
+each host's registry holds exactly the drivers that can work there. On a
+foreign platform the driver is absent from `-drivers`, the add picker, and
+`-example-devices`, and a device entry naming it is reported and skipped like
+any unresolvable fragment — never a build break, never a driver that lists but
+cannot run. smpro and asiair (`hurd_linux.go`: Linux SBC buses) are the
+in-tree examples. A driver whose *code* only compiles on some platforms (a
+vendor SDK, a cgo transport) is the same case with more files constrained; the
+registration constraint is what keeps the story uniform.
+
 ## 4. Publishing
 
 The module is pushed to a public repository, and a user adds it to `hurd.conf`:
@@ -113,11 +130,11 @@ built-in.
 ## Optional: the LX200 front-end
 
 Devices are Alpaca-first. A mount driver can also serve Stellarium and SkySafari
-over Meade-LX200 by implementing an optional interface that the engine detects:
-`LiveMount() (lx200.Mount, error)`, which returns the mount only once it is
-acquired. The engine then runs an LX200 bridge in front of it. A driver that
-implements `UseOptics(server.OpticsStore)` shares one optics holder between
-Alpaca's `setoptics` Action and the reported aperture and focal length.
+over Meade-LX200 by implementing `LiveMount() (lx200.Mount, error)`, which
+returns the mount only once it is acquired; `lx200/bridge` runs a stateless
+TCP server over it. The bridge is the mount binary's to host (alpacahurd no
+longer runs one): the driver's own cmd wires it up from the entry's
+`lx200Port` key, with the mount type and identity only the driver knows.
 
 Non-mount devices, and mounts that do not implement `LiveMount`, remain
 Alpaca-only.

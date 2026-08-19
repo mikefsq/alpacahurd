@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 
@@ -104,11 +103,17 @@ func TestCommonKeysMatchRegistry(t *testing.T) {
 		}
 		engine = append(engine, name)
 	}
-	shared := registry.CommonKeys()
-	sort.Strings(engine)
-	sort.Strings(shared)
-	if !reflect.DeepEqual(engine, shared) {
-		t.Fatalf("deviceCommon keys %v != registry.CommonKeys %v", engine, shared)
+	// registry.CommonKeys keeps the removed front-ends' keys (indi, lx200Port,
+	// the optics block, guideRate) so drivers still strip them from old files;
+	// the hurd reads only a subset of them.
+	shared := map[string]bool{}
+	for _, k := range registry.CommonKeys() {
+		shared[k] = true
+	}
+	for _, k := range engine {
+		if !shared[k] {
+			t.Fatalf("deviceCommon key %q is not in registry.CommonKeys %v", k, registry.CommonKeys())
+		}
 	}
 }
 

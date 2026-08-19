@@ -8,8 +8,9 @@
       workspace   (re)write go.work over the sibling checkouts (pre-release only)
       tidy        resolve every dependency from the module proxy (no siblings needed)
       gen         regenerate drivers_gen.go from hurd.conf
-      build       build alpacahurd.exe
-      all         gen + build (default)
+      build       build the bare orchestrator (no compiled-in drivers)
+      fat         bundle the hurd.conf drivers into alpacahurd.exe
+      all         build (default)
       test        run the test suite
       install     install the binary + config and register a startup task (admin)
       uninstall   remove the task and firewall rule (admin; config is kept)
@@ -67,8 +68,9 @@ alpacahurd make.ps1 targets:
   workspace   (re)write go.work over the sibling checkouts (pre-release only)
   tidy        resolve every dependency from the module proxy (no siblings needed)
   gen         regenerate drivers_gen.go from hurd.conf
-  build       build $Bin
-  all         gen + build (default)
+  build       build the bare orchestrator (no compiled-in drivers)
+  fat         bundle the hurd.conf drivers into $Bin
+  all         build (default)
   test        run the test suite
   install     install binary + config and register a startup task (admin)
   uninstall   remove the task and firewall rule (admin; config kept)
@@ -116,13 +118,22 @@ function Target-Tidy {
 }
 
 function Target-Build {
-    # The Windows transports are pure Go; no C toolchain required.
+    # The bare orchestrator: drivers_gen.go carries `//go:build fat`, so this
+    # build excludes it and every device entry resolves to an installed driver
+    # binary. The Windows transports are pure Go; no C toolchain required.
     $env:CGO_ENABLED = "0"
     Invoke-Native go @("build", "-o", $Bin, ".")
-    Write-Host "built .\$Bin"
+    Write-Host "built .\$Bin (bare: no compiled-in drivers)"
 }
 
-function Target-All  { Target-Gen; Target-Build }
+function Target-Fat {
+    # The bundled build: the fat tag compiles the hurd.conf drivers in.
+    $env:CGO_ENABLED = "0"
+    Invoke-Native go @("build", "-tags", "fat", "-o", $Bin, ".")
+    Write-Host "built .\$Bin (fat: hurd.conf drivers compiled in)"
+}
+
+function Target-All  { Target-Build }
 
 function Target-Test { Invoke-Native go @("test", "./...") }
 
@@ -200,6 +211,7 @@ try {
         "gen"       { Target-Gen }
         "tidy"      { Target-Tidy }
         "build"     { Target-Build }
+        "fat"       { Target-Gen; Target-Fat }
         "all"       { Target-All }
         "test"      { Target-Test }
         "install"   { Target-Install }
