@@ -15,7 +15,14 @@ import (
 	alpacadev "github.com/mikefsq/goalpaca/server"
 )
 
-const version = "v0.1.0"
+// version is the hurd's own version, reported to Alpaca clients as
+// ManufacturerVersion and shown on the orchestrator page. A packaged build
+// stamps the release over it:
+//
+//	go build -ldflags "-X github.com/mikefsq/alpacahurd/hurd.version=v1.2.3"
+//
+// The linker can only write a var, so this is not a const.
+var version = "v0.1.0"
 
 // built pairs a configured device spec with the constructed driver.
 type built struct {

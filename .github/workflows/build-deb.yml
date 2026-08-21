@@ -1,0 +1,190 @@
+name: Debian Packages
+
+# MANUAL ONLY for a release. A run that publishes produces something the fleet
+# installs on its next `apt upgrade`, and when that happens is a decision rather
+# than a consequence of pushing a tag. Start it from the Actions tab, or:
+#
+#     gh workflow run build-deb.yml --repo mikefsq/alpacahurd -f version=1.2.3
+#
+# A pull request still builds and installs the package, which is the part worth
+# knowing on a change; it has nothing to publish and no release job runs.
+#
+# The packages reach users through mikefsq/apt, which is also manual: it reads
+# this repository's latest release and downloads the assets sources.json names.
+# So publishing is two deliberate steps — release here, then run Publish archive
+# there.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version without a leading v, e.g. 1.2.3'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as a prerelease. The apt archive resolves /releases/latest, which skips these.'
+        required: false
+        type: boolean
+        default: false
+  pull_request:
+
+# Not cancel-in-progress: a run cancelled between the two `gh release` calls
+# leaves a release carrying some architectures and not others.
+concurrency:
+  group: build-deb-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-deb:
+    name: build
+    runs-on: ubuntu-latest
+    # The binary is pure Go and is built with CGO_ENABLED=0, so every
+    # architecture cross-compiles on one x86 runner and one package per
+    # architecture installs on every Debian and Ubuntu release. A C project
+    # needs a container per suite and qemu for the foreign ones; this needs
+    # neither, so the whole matrix is a single job of a few seconds.
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+      with:
+        # build/build-deb derives the package version from `git describe`, which
+        # needs the tags and the commit's history.
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: go.mod
+        cache: true
+
+    - name: Vet
+      # go.work is gitignored and absent here, so this resolves every dependency
+      # from the committed go.mod. A build that needs a sibling checkout fails.
+      run: go vet ./...
+
+    - name: Build packages
+      # A pull request passes no version, so build-deb derives one from the
+      # source version and the commit: 0.1.0~git20260821.9c1f2ab, which dpkg
+      # sorts below the release it precedes.
+      run: build/build-deb ${{ inputs.version && format('-v {0}', inputs.version) || '' }}
+
+    - name: Upload packages
+      uses: actions/upload-artifact@v6
+      with:
+        name: alpacahurd-deb
+        path: dist/*.deb
+        if-no-files-found: error
+
+  install-test:
+    name: install test
+    needs: build-deb
+    runs-on: ubuntu-latest
+    # Install the package the way a user would and check the service comes up.
+    # The maintainer scripts are the part of a package that no build step
+    # exercises: this catches a postinst that seeds the wrong path, a unit that
+    # points at a binary the package did not install, and a purge that leaves
+    # the service enabled.
+    steps:
+    - name: Download packages
+      uses: actions/download-artifact@v6
+      with:
+        name: alpacahurd-deb
+        path: dist
+
+    - name: Install
+      run: sudo apt-get install -y ./dist/alpacahurd_*_amd64.deb
+
+    - name: Check the service is running
+      run: |
+        systemctl is-enabled alpacahurd.service
+        systemctl is-active alpacahurd.service
+
+    - name: Verify the unit files
+      # Informational. systemd-analyze also reports on whatever units it pulls
+      # in as dependencies, so an unrelated warning from the runner's own units
+      # would fail the job for nothing. The device@ template is the reason to
+      # run it at all: nothing else here ever loads it.
+      continue-on-error: true
+      run: systemd-analyze verify alpacahurd.service alpacahurd-device@.service
+
+    - name: Check the seeded configuration
+      run: |
+        test -f /etc/alpacahurd/hurd.json
+        test -d /etc/alpacahurd/devices.d
+        test -d /var/lib/alpacahurd/devices
+        sudo alpacahurd -check -config /etc/alpacahurd/hurd.json
+
+    - name: Check the orchestrator page answers
+      # The orchestrator page and the Alpaca discovery responder share port
+      # 32227. A reply here proves the service is serving, not merely started.
+      run: |
+        for i in $(seq 20); do
+          curl -fsS -o /dev/null http://127.0.0.1:32227/setup && exit 0
+          sleep 1
+        done
+        echo "the orchestrator page never answered on port 32227" >&2
+        journalctl -u alpacahurd --no-pager -n 50
+        exit 1
+
+    - name: Check the simulated herd serves
+      # The package compiles in no hardware driver, so the sim herd is what
+      # proves the binary can bind ports and answer Alpaca.
+      run: |
+        sudo cp /usr/share/doc/alpacahurd/examples/hurd.sim.json /etc/alpacahurd/hurd.json
+        sudo systemctl restart alpacahurd.service
+        for i in $(seq 20); do
+          curl -fsS "http://127.0.0.1:11110/api/v1/telescope/0/name" && exit 0
+          sleep 1
+        done
+        echo "the simulated telescope never answered on port 11110" >&2
+        journalctl -u alpacahurd --no-pager -n 50
+        exit 1
+
+    - name: Purge
+      run: |
+        sudo apt-get purge -y alpacahurd
+        test ! -e /usr/bin/alpacahurd
+        test ! -e /etc/alpacahurd
+        test ! -e /var/lib/alpacahurd
+        test ! -e /lib/systemd/system/alpacahurd.service
+
+  release:
+    name: release
+    needs: [build-deb, install-test]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Download packages
+      uses: actions/download-artifact@v6
+      with:
+        name: alpacahurd-deb
+        path: dist
+
+    - name: Create the release and attach the packages
+      # `gh release create` creates the tag as well, at the commit this run was
+      # dispatched from, so a release is one action rather than a tag push and
+      # a separate upload.
+      #
+      # No --clobber, and the release must not already exist. mikefsq/apt pulls
+      # these assets by name, so replacing a package under a tag it already
+      # published would change what the archive serves without the version
+      # changing with it. Re-releasing means a new version.
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: v${{ inputs.version }}
+      run: |
+        if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          echo "::error::$TAG already exists — release a new version rather than replacing it"
+          exit 1
+        fi
+        gh release create "$TAG" dist/*.deb \
+          --repo "$GITHUB_REPOSITORY" \
+          --target "$GITHUB_SHA" \
+          --title "$TAG" \
+          --generate-notes \
+          ${{ inputs.prerelease && '--prerelease' || '' }}
+        echo "Released $TAG. Run 'Publish archive' in mikefsq/apt to reach the fleet." >> "$GITHUB_STEP_SUMMARY"

@@ -39,7 +39,7 @@ WS_DIRS := . \
 	../goalpaca-devices/asiair ../goalpaca-devices/ptpcam \
 	../goalpaca-devices/smpro
 
-.PHONY: all help gen workspace build fat tidy test install uninstall clean
+.PHONY: all help gen workspace build fat deb tidy test install uninstall clean
 
 all: build ## the bare orchestrator (default); `make fat` bundles the hurd.conf drivers
 
@@ -80,6 +80,12 @@ build: ## the bare orchestrator: sim drivers only, hardware as separate binaries
 fat: gen ## bundle the hurd.conf drivers into the binary (compiled-in layout)
 	CGO_ENABLED=$(CGO) go build -tags fat -o $(BIN) .
 
+# The .deb holds the bare orchestrator and the simulated devices, and no hardware
+# driver: each driver ships its own package. One package per architecture covers
+# every Debian and Ubuntu release, since CGO_ENABLED=0 links nothing shared.
+deb: ## build .deb packages for amd64 and arm64 into ./dist
+	build/build-deb
+
 # tidy resolves every module requirement from the proxy into go.mod/go.sum, so a
 # fresh clone builds with no sibling checkouts. (`make workspace` is the alternative:
 # track the siblings' local HEAD through go.work instead.)
@@ -104,5 +110,6 @@ else
 	./deploy/uninstall.sh
 endif
 
-clean: ## remove the built binary
+clean: ## remove the built binary and the packages
 	rm -f $(BIN)
+	rm -rf dist

@@ -7,3 +7,6 @@ go.work.sum
 
 # Local runtime config (the repo ships config/hurd.example.json instead).
 /hurd.json
+
+# Packages built by build/build-deb.
+/dist

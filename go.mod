@@ -8,7 +8,7 @@ go 1.25.0
 // sibling checkouts instead, so this file only pins what tidy has confirmed
 // published.
 require (
-	github.com/mikefsq/goalpaca v0.3.1
+	github.com/mikefsq/goalpaca v0.3.2-0.20260819050816-8cf78fc439ab
 	github.com/mikefsq/goindi v0.0.0-20260623000347-2dda0b2dec05
 	github.com/mikefsq/lx200 v0.2.1
 	golang.org/x/net v0.46.0

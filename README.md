@@ -17,6 +17,63 @@ This works on any platform that can compile Go.
 | Windows | WinUSB / HID / serial | `go build`, no C toolchain |
 
 
+
+## Install from a package (Debian, Ubuntu, Raspberry Pi OS)
+
+The packages are distributed in an apt archive. Install the archive's 
+signing key, add the source, then install:
+
+```sh
+sudo curl -fsSLo /usr/share/keyrings/mikefsq-archive-keyring.gpg \
+  https://mikefsq.github.io/apt/mikefsq-archive-keyring.gpg
+
+sudo tee /etc/apt/sources.list.d/mikefsq.sources >/dev/null <<'EOF'
+Types: deb
+URIs: https://mikefsq.github.io/apt
+Suites: trixie
+Components: main
+Architectures: arm64
+Signed-By: /usr/share/keyrings/mikefsq-archive-keyring.gpg
+EOF
+
+sudo apt update && sudo apt install alpacahurd
+```
+
+Set `Suites` to the release you run (`bookworm` or `trixie`) and `Architectures`
+to what `dpkg --print-architecture` reports.
+
+Each GitHub release also attaches the `.deb` files themselves, for a machine
+that should not track the archive:
+
+```sh
+sudo apt install ./alpacahurd_1.2.3_arm64.deb
+```
+
+The package installs `/usr/bin/alpacahurd`, the systemd units, and the udev
+rules, then seeds `/etc/alpacahurd/hurd.json` and starts the service. It holds
+the bare orchestrator and the simulated devices and compiles in no hardware
+driver, so a fresh install serves an idle herd until a driver package is added
+beside it. Verify the install against the simulators first:
+
+```sh
+sudo cp /usr/share/doc/alpacahurd/examples/hurd.sim.json /etc/alpacahurd/hurd.json
+sudo systemctl restart alpacahurd
+```
+
+One package per architecture installs on every release. The binary is pure Go
+and links nothing shared, so it carries no dependency on a suite's glibc symbol
+versions and needs no separate build per Debian release.
+
+`sudo apt remove alpacahurd` stops the service and keeps the configuration;
+`sudo apt purge alpacahurd` also deletes `/etc/alpacahurd` and
+`/var/lib/alpacahurd`.
+
+Build the packages yourself with `make deb`, which writes them to `./dist` and
+takes about eight seconds. The build needs a Go toolchain, `dpkg-deb` and
+`file`, and it needs no root. `build/build-deb -h` lists its options: `-a`
+selects architectures (`armhf` builds too, for 32-bit Raspberry Pi OS), `-v`
+sets the version, `-o` the output directory.
+
 ## Building from source
 
 The default `make build` builds the bare orchestrator `./alpacahurd`, which
@@ -43,9 +100,10 @@ sudo launchctl kickstart -k system/com.mikefsq.alpacahurd
 
 ```
 
-## Install on macOS/Linux
+## Install from Source on macOS/Linux
 
-Needs Go ≥ 1.23. Debian 13 Trixie ships Go 1.24; a Mac can use `brew install
+Needs Go ≥ 1.25, which `go.mod` declares. Debian 13 Trixie ships Go 1.24, so
+a build there fetches the newer toolchain itself; a Mac can use `brew install
 go`. The official toolchain is at [go.dev/dl](https://go.dev/dl/).
 
 ```sh
@@ -72,7 +130,7 @@ binary beside `alpacahurd` and writes a config file into `devices.d` if one
 does not already exist.
 ## Install on Windows
 
-Needs Go ≥ 1.23 ([go.dev/dl](https://go.dev/dl/)); no C toolchain. `make.ps1`
+Needs Go ≥ 1.25 ([go.dev/dl](https://go.dev/dl/)); no C toolchain. `make.ps1`
 is the Windows counterpart of the Makefile (`.\make.ps1 help` lists the
 targets). From PowerShell in the repo directory:
 
@@ -218,6 +276,41 @@ so serial binding needs read-write access to the device node.
 `deploy/99-alpacahurd.rules` covers ZWO, PlayerOne, Astroasis, and
 FTDI-serial devices; `make install` installs it (then replug). Add other
 vendors' `idVendor` lines as you wire their drivers in.
+
+## Releasing
+
+A release takes two deliberate steps, and a push starts neither of them.
+
+Build and release the packages from this repository's Actions tab, or:
+
+```sh
+gh workflow run build-deb.yml --repo mikefsq/alpacahurd -f version=1.2.3
+```
+
+The run builds both architectures, installs the amd64 package on a runner and
+checks the service answers, then creates tag `v1.2.3` and a release carrying
+`alpacahurd_1.2.3_amd64.deb` and `alpacahurd_1.2.3_arm64.deb`. It refuses a
+version that already has a release. The archive serves these assets by name, so
+replacing one would change what an installed machine gets without the version
+changing with it.
+
+Then publish the archive, from the Actions tab of
+[mikefsq/apt](https://github.com/mikefsq/apt):
+
+```sh
+gh workflow run publish.yml --repo mikefsq/apt
+```
+
+That run reads this repository's latest release, downloads the assets named in
+its `sources.json`, rebuilds and signs every index, and republishes the site.
+Until it runs, a new release changes nothing for anyone who installed from the
+archive.
+
+Mark a release as a prerelease to keep it out of the archive while leaving the
+packages downloadable: the archive resolves `/releases/latest`, which skips
+them.
+
+A pull request runs the same build and install test and publishes nothing.
 
 ## Running it yourself (no service)
 
