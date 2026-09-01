@@ -1,19 +1,8 @@
 # alpacahurd — build and install the herd. Run `make help` for the targets.
 #
-# Two ways to resolve the internal dependencies:
-#   make tidy       pins everything from the module proxy into go.mod/go.sum;
-#                   no sibling checkouts needed (the modules are published). Run once,
-#                   then `make`; committing go.mod/go.sum makes a plain clone build.
-#   make workspace  overlays a gitignored go.work on the sibling repos checked out
-#                   next to this one, tracking their local HEAD (for library dev).
-#
-# On Windows (no make): use make.ps1 (tidy/workspace/build/...).
 
 BIN := alpacahurd
 
-# macOS drivers reach USB/HID through IOKit and need cgo (Xcode command-line
-# tools); the Linux (usbfs/hidraw) and Windows (WinUSB) transports are pure Go,
-# so those builds are static.
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
 CGO ?= 1
@@ -21,10 +10,6 @@ else
 CGO ?= 0
 endif
 
-# Sibling module checkouts the workspace overlays, resolved relative to this
-# repo. The goalpaca-devices drivers are the default hurd.conf set; the rest are
-# the libraries they and the engine depend on. asiccd/asicaa (ZWO SDK, cgo) are
-# intentionally omitted.
 WS_DIRS := . \
 	../goalpaca ../lx200 ../goindi ../astrocam ../goasi \
 	../goasi/asiair ../ptp ../stellarmate \
@@ -39,11 +24,11 @@ WS_DIRS := . \
 	../goalpaca-devices/asiair ../goalpaca-devices/ptpcam \
 	../goalpaca-devices/smpro
 
-.PHONY: all help gen workspace build fat deb tidy test install uninstall clean
+.PHONY: all help gen workspace build fat deb tidy deps-head test install uninstall clean
 
-all: build ## the bare orchestrator (default); `make fat` bundles the hurd.conf drivers
+all: build 
 
-help: ## list the targets
+help: 
 	@echo "alpacahurd make targets:"
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
 		| sort \
@@ -53,14 +38,10 @@ help: ## list the targets
 	@echo "checkouts needed). 'make workspace' instead overlays a gitignored go.work"
 	@echo "on the sibling repos next to this one, tracking their local HEAD."
 
-gen: ## regenerate drivers_gen.go from hurd.conf
+gen: 
 	go run ./internal/gendrivers
 
-# workspace (re)creates the gitignored go.work over whichever sibling checkouts
-# are present, so a fresh box resolves every internal dep to its local HEAD
-# without any module tags. Missing siblings are reported, not fatal: clone
-# them next to this repo and re-run.
-workspace: ## (re)write go.work over the present sibling checkouts
+workspace: 
 	@rm -f go.work go.work.sum
 	@go work init
 	@for d in $(WS_DIRS); do \
@@ -69,47 +50,44 @@ workspace: ## (re)write go.work over the present sibling checkouts
 	done
 	@echo "go.work written over the present siblings"
 
-# The two build flavors differ only in the fat build tag: drivers_gen.go
-# carries `//go:build fat`, so the bare build excludes it and compiles no
-# driver in: every device entry then resolves to an installed driver binary
-# under the platform supervisor. The sim drivers are in both flavors (sim.go),
-# so a bare build's -drivers and add picker list only those.
-build: ## the bare orchestrator: sim drivers only, hardware as separate binaries
+build: 
 	CGO_ENABLED=$(CGO) go build -o $(BIN) .
 
-fat: gen ## bundle the hurd.conf drivers into the binary (compiled-in layout)
+fat: gen 
 	CGO_ENABLED=$(CGO) go build -tags fat -o $(BIN) .
 
-# The .deb holds the bare orchestrator and the simulated devices, and no hardware
-# driver: each driver ships its own package. One package per architecture covers
-# every Debian and Ubuntu release, since CGO_ENABLED=0 links nothing shared.
-deb: ## build .deb packages for amd64 and arm64 into ./dist
+deb: 
 	build/build-deb
 
-# tidy resolves every module requirement from the proxy into go.mod/go.sum, so a
-# fresh clone builds with no sibling checkouts. (`make workspace` is the alternative:
-# track the siblings' local HEAD through go.work instead.)
-tidy: ## resolve module versions from the module proxy (no siblings needed)
+deps-head: 
+	@self="$$(go list -m)"; \
+	mods="$$(grep -oE 'github.com/mikefsq/[a-zA-Z0-9./-]+' go.mod | sort -u | grep -vxF "$$self")"; \
+	[ -n "$$mods" ] || { echo "deps-head: no github.com/mikefsq dependencies in go.mod"; exit 0; }; \
+	echo "$$mods" | sed 's/^/  /'; \
+	go get $$(echo "$$mods" | sed 's/$$/@main/' | tr '\n' ' ')
+
+tidy: 
 	go run ./internal/gendrivers
+	$(MAKE) deps-head
 	go mod tidy
 
-test: ## run the test suite
+test: 
 	go test ./...
 
-install: ## install as a service (systemd on Linux, launchd on macOS) — needs root
+install: 
 ifeq ($(UNAME_S),Darwin)
 	./deploy/install-macos.sh ./$(BIN)
 else
 	./deploy/install.sh ./$(BIN)
 endif
 
-uninstall: ## stop and remove the service (config is kept) — needs root
+uninstall: 
 ifeq ($(UNAME_S),Darwin)
 	./deploy/uninstall-macos.sh
 else
 	./deploy/uninstall.sh
 endif
 
-clean: ## remove the built binary and the packages
+clean: 
 	rm -f $(BIN)
 	rm -rf dist
