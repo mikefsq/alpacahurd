@@ -23,10 +23,7 @@ func printDrivers(w io.Writer) {
 	tw.Flush()
 }
 
-// printExample writes a starter config assembled from every compiled-in
-// hardware driver's ConfigExample (each entry disabled, on a sequential port;
-// flip "enable" and fill in your identifiers), or a single driver's entry when
-// name is given. install.sh uses the full form to seed /etc/alpacahurd/hurd.json.
+// printExample writes server settings, or a device entry when name is given.
 func printExample(w io.Writer, name string) error {
 	if name != "" {
 		d, ok := registry.Lookup(name)
@@ -40,8 +37,6 @@ func printExample(w io.Writer, name string) error {
 		fmt.Fprintln(w, entry)
 		return nil
 	}
-	// Server blocks only. Devices live in devices.d beside this file, one per
-	// file; writeExampleDevicesDir seeds that directory.
 	out := "{\n" +
 		"  \"discovery\": \"direct\",\n" +
 		"  \"devices\": []\n" +
@@ -50,11 +45,8 @@ func printExample(w io.Writer, name string) error {
 	return nil
 }
 
-// writeExampleDevicesDir seeds dir with one disabled device file per compiled-in
-// hardware driver, <driver>.json, each holding the driver's ConfigExample plus a
-// sequential port. Existing files are left alone, so a re-run adds files for
-// newly compiled-in drivers without touching an admin's edits. It reports what
-// it wrote. Sims are skipped, as with -example; ask for one by name.
+// writeExampleDevicesDir writes disabled templates for compiled-in hardware drivers.
+// It preserves existing files and skips simulators.
 func writeExampleDevicesDir(w io.Writer, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -71,9 +63,6 @@ func writeExampleDevicesDir(w io.Writer, dir string) error {
 			fmt.Fprintf(w, "keep   %s\n", path)
 			continue
 		}
-		// The seed documents every key at its default, all commented, so it
-		// changes nothing until a line is uncommented; driver and enable:false
-		// are the only live keys.
 		var b strings.Builder
 		if err := devicemain.WriteCommentedDeviceFile(&b, d, thisPort); err != nil {
 			return err
@@ -111,28 +100,19 @@ func exampleEntry(d registry.Driver, port int, disabled bool) (string, error) {
 	return entry, nil
 }
 
-// checkConfig validates cfg by constructing every enabled device (no hardware
-// is touched; construction only binds identities). It prints one line per
-// device and returns two counts. fatal counts what stops the server itself,
-// such as an unusable "listen". errs counts per-device problems, which serve
-// skips while serving the rest, so -check's exit gates on fatal alone. A
-// supervisor runs -check as a pre-start step for the readable report; one bad
-// device file must not keep the herd down.
+// checkConfig checks devices without opening hardware and prints the results.
+// It returns server-fatal and per-device error counts separately.
 func checkConfig(w io.Writer, cfg *Config) (fatal, errs int) {
 	fail := func(spec DeviceSpec, format string, args ...any) {
 		fmt.Fprintf(w, "error  %-22s %s\n", spec.Driver, fmt.Sprintf(format, args...))
 		errs++
 	}
 
-	// The one whole-server check: serve resolves "listen" before anything else
-	// and cannot start when it does not resolve.
 	if _, _, err := resolveListen(cfg.Listen); err != nil {
 		fmt.Fprintf(w, "fatal  %-22s %v\n", "listen", err)
 		fatal++
 	}
 
-	// Device numbers are per port, assigned as serve assigns them, so -check
-	// reports the addresses the hurd will serve.
 	nums := map[int]*deviceNumbers{}
 	enabled := 0
 	for _, spec := range cfg.Devices {
@@ -152,14 +132,11 @@ func checkConfig(w io.Writer, cfg *Config) (fatal, errs int) {
 			continue
 		default:
 			if spec.Instance != "" {
-				// An unresolvable devices.d fragment is a warning: serve skips it
-				// and keeps starting, so -check must not gate startup on it.
+				// Unresolved device files are warnings, so other devices can start.
 				fmt.Fprintf(w, "warn   %-22s %s: driver is not compiled in and no binary was found; the entry will be skipped\n", spec.Driver, spec.Source)
 				continue
 			}
 		}
-		// A multi-device entry (a driver with a MultiKey) checks one device per
-		// block; a flat entry is itself.
 		subs, serr := subSpecs(spec)
 		if serr != nil {
 			fail(spec, "%v", serr)

@@ -10,11 +10,7 @@ import (
 	alpacadev "github.com/mikefsq/goalpaca/server"
 )
 
-// newServer builds one device server the way serve does: on port when it is
-// set, else scanning its own window above portScanBase (the scanIndex-th
-// window, so concurrent scanners never race for one port), with the setup
-// redirect, the listen addresses, the request logger, and per-device settings
-// files under the state directory.
+// newServer configures a device server with a fixed port or its own scan window.
 func (o *orchestrator) newServer(port, scanIndex int) *alpacadev.Server {
 	return alpacadev.New(alpacadev.Config{
 		AlpacaPort:          port,
@@ -28,29 +24,17 @@ func (o *orchestrator) newServer(port, scanIndex int) *alpacadev.Server {
 		ManufacturerVersion: version,
 		Logger:              o.logger,
 		ConfigPath:          o.cfgPath,
-		// Setup-page changes persist under the state directory, one file
-		// per device (see Server.SettingsPath); the config file's own keys
-		// render locked, so persistence never overrides an admin value.
-		Settings: alpacadev.NewFileStore(),
+		Settings:            alpacadev.NewFileStore(),
 	})
 }
 
-// setEnabled is the orchestrator page's enable and disable for a devices.d
-// entry, in either layout, without a restart. The switch is written to the
-// entry's state file first, so the next start agrees with the page; then the
-// device is acted on: a compiled-in driver is constructed and registered on
-// its port's server (a new server is started for a new port), or unregistered
-// with its hardware closed; a separate binary is started or stopped through
-// the supervisor, and enabled or disabled at boot there. The message says
-// what happened.
+// setEnabled persists the enable switch and starts or stops the device instance.
 func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (string, error) {
 	if inst == "" || inst == "(inline)" {
 		return "", fmt.Errorf("only a devices.d entry can be switched; an inline entry is edited in hurd.json")
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	// A multi-device entry (subSpecs) has one row per block, sharing the
-	// instance, the file, and the switch; collect them all.
 	var idxs []int
 	for i := range o.rows {
 		if o.rows[i].spec.Instance == inst {
@@ -77,8 +61,7 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 			if !row.inProcess {
 				continue
 			}
-			// The front-end goes with the device: cancel its context before
-			// the registration is removed.
+			// Stop the front-end before removing its device registration.
 			if row.stopFrontEnd != nil {
 				row.stopFrontEnd()
 				row.stopFrontEnd = nil
@@ -95,7 +78,6 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 			closed++
 		}
 		if closed > 0 {
-			// The entry collapses back to one disabled row.
 			o.replaceRows(idxs, []orchRow{{spec: cur, res: res, port: cur.Port}})
 			if closed == 1 {
 				return fmt.Sprintf("%s disabled: hardware closed and the device removed from port %d", inst, port), nil
@@ -122,7 +104,6 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 		return fmt.Sprintf("%s disabled", inst), nil
 	}
 
-	// Enable.
 	for _, i := range idxs {
 		if o.rows[i].inProcess {
 			return fmt.Sprintf("%s is already running", inst), nil
@@ -145,9 +126,7 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 			row := orchRow{spec: sub, res: res, port: sub.Port}
 			msg, err := o.startInProcess(&row)
 			if err != nil {
-				// The switch goes back to off: an entry recorded enabled that
-				// cannot be built would fail the next start. Devices started
-				// for earlier blocks keep serving until then.
+				// Reset the persisted switch on failure; already started blocks remain active.
 				_ = writeStateEnable(inst, false)
 				row.skipped = err.Error()
 				o.replaceRows(idxs, append(newRows, row))
@@ -202,10 +181,8 @@ func (o *orchestrator) replaceRows(idxs []int, rows []orchRow) {
 	o.rows = out
 }
 
-// startInProcess constructs row's device and serves it: on the running server
-// for its port when one exists, else on a new server started now (a set port
-// or a fresh scan window), whose port is recorded in the state file and added
-// to the discovery responder. Called with o.mu held.
+// startInProcess registers and serves a device, reusing its port server if possible.
+// The caller must hold o.mu.
 func (o *orchestrator) startInProcess(row *orchRow) (string, error) {
 	if o.ctx == nil || o.byPort == nil {
 		return "", fmt.Errorf("the orchestrator is not serving; a restart is needed")
@@ -225,7 +202,6 @@ func (o *orchestrator) startInProcess(row *orchRow) (string, error) {
 		} else {
 			srv = o.newServer(spec.Port, 0)
 		}
-		// New server for this one device: it carries the device's identity.
 		srv.SetIdentity(dev.Name(), "", driverVersion(spec.Driver))
 		errc := make(chan error, 1)
 		go func() { errc <- srv.Run(o.ctx) }()
@@ -253,8 +229,6 @@ func (o *orchestrator) startInProcess(row *orchRow) (string, error) {
 	}
 	_ = srv.SetReloader(drv.Type, num, reloaderFor(spec))
 	row.reloadable = true
-	// The driver's front-end, as serve wires it: a fresh one per enable,
-	// stopped again by the disable path.
 	row.stopFrontEnd = wireFrontEnd(o.ctx, drv, srv, num, spec, o.listenAddrs)
 	row.inProcess, row.num, row.port, row.srvKey = true, num, srv.Port(), key
 	row.deviceName, row.devType = dev.Name(), drv.Type

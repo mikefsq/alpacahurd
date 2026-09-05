@@ -1,39 +1,17 @@
 #!/usr/bin/env bash
 
-# build-deb - build alpacahurd .deb packages for Debian, Ubuntu and Raspberry Pi OS.
-#
-# One package per architecture covers every release. The binary is pure Go and is
-# built with CGO_ENABLED=0, so it links no shared library, carries no versioned
-# glibc symbol, and installs the same on bookworm, trixie, noble and Raspberry Pi
-# OS. A C project needs a container per suite to get this right; this one needs a
-# cross-compile, which is why the whole matrix runs on a single runner in seconds.
-#
-# The package holds the bare orchestrator and the simulated devices. It compiles
-# in no hardware driver: each driver ships as its own package and installs beside
-# alpacahurd in /usr/bin, where the orchestrator resolves it by name. A fresh
-# install therefore serves the sim-* herd and nothing else until a driver package
-# is added.
-#
-# Usage:
-#
-#   build/build-deb                       # amd64 and arm64 into ./dist
-#   build/build-deb -a arm64              # one architecture
-#   build/build-deb -v 1.2.3              # override the version
-#
-# The build needs a Go toolchain, dpkg-deb and file. It needs no root: dpkg-deb
-# --root-owner-group writes every path as root:root without one.
-
+# Build Debian packages. Requires Go, dpkg-deb, and file; no root needed.
+# Usage: build/build-deb [-a "amd64 arm64"] [-v 1.2.3] [-o dist]
 set -o pipefail
 
 SCRIPT_DIR=$(cd "${BASH_SOURCE%/*}" && pwd)
 SRC_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 
 PKG=alpacahurd
-MAINTAINER="Mike Furlotti <mfurlotti@gmail.com>"
+MAINTAINER="mikefsq <162642838+mikefsq@users.noreply.github.com>"
 HOMEPAGE=https://github.com/mikefsq/alpacahurd
 
-# Debian architecture names, mapped to GOARCH below. armhf covers 32-bit
-# Raspberry Pi OS and is buildable with -a but is not part of the default set.
+# armhf is supported with -a but excluded from the default set.
 arches="amd64 arm64"
 outdir=$SRC_DIR/dist
 version=
@@ -77,10 +55,7 @@ goarch () {
     esac
 }
 
-# resolve_version derives the package version. A commit carrying a vX.Y.Z tag is
-# a release and takes X.Y.Z. Any other commit takes the source version with a
-# date and abbreviated hash appended after a tilde, which dpkg sorts *below* the
-# plain version: 0.1.0~git20260821.9c1f2ab upgrades cleanly to 0.1.0.
+# resolve_version uses the release tag or a prerelease version with a date and commit hash.
 resolve_version () {
     local tag base stamp sha
     tag=$(git -C "$SRC_DIR" describe --exact-match --tags HEAD 2>/dev/null)
@@ -99,10 +74,7 @@ resolve_version () {
     fi
 }
 
-# check_package inspects a built package before it is handed over. The static
-# link is the property the whole one-package-per-architecture scheme rests on:
-# a binary that acquired a dynamic section would need a per-suite build and a
-# Depends line that this package does not carry.
+# check_package verifies static linking, version stamping, and installed paths.
 check_package () {
     local deb=$1 arch=$2 root rc=0
     root=$(mktemp -d) || return 1
@@ -122,16 +94,11 @@ check_package () {
         rc=1
     fi
 
-    # The version reaches the binary through -ldflags -X. A stamp that fails to
-    # apply leaves the source default behind, which for a release build is the
-    # wrong version on the orchestrator page and in every Alpaca description.
     if ! grep -aqF "v$version" "$root/usr/bin/$PKG"; then
         echo "$deb: the binary does not carry the stamped version v$version" >&2
         rc=1
     fi
 
-    # The units are generated from deploy/*.service with the path rewritten.
-    # A leftover /usr/local path would leave the service pointing at nothing.
     if grep -rq /usr/local "$root/lib/systemd/system/"; then
         echo "$deb: a unit still refers to /usr/local" >&2
         rc=1
@@ -164,10 +131,7 @@ build_one () {
              "$root/usr/share/doc/$PKG/examples" \
              "$root/DEBIAN"
 
-    # -trimpath drops the builder's absolute paths, "-s -w" drops the symbol
-    # table and DWARF, and -X stamps the release over the source default.
-    # GOFLAGS=-mod=readonly makes the build fail rather than edit go.mod, so a
-    # package can only be built from the committed dependency set.
+    # Disable workspace and dependency edits for reproducible package builds.
     if ! CGO_ENABLED=0 GOOS=linux GOARCH="$ga" GOARM="$gm" GOFLAGS=-mod=readonly GOWORK=off \
         go build -trimpath \
             -ldflags "-s -w -X github.com/mikefsq/alpacahurd/hurd.version=v$version" \
@@ -177,10 +141,7 @@ build_one () {
     fi
     chmod 0755 "$bin"
 
-    # The shipped units name /usr/local/bin, which is where `sudo make install`
-    # puts a source build. A package may not write under /usr/local, so the
-    # packaged copies are rewritten to /usr/bin. deploy/*.service stays the one
-    # source for their content.
+    # Package binaries belong in /usr/bin; source installs use /usr/local/bin.
     local unit
     for unit in "$PKG.service" "$PKG-device@.service"; do
         sed 's#/usr/local/bin/#/usr/bin/#g' "$SRC_DIR/deploy/$unit" \
@@ -188,17 +149,10 @@ build_one () {
         chmod 0644 "$root/lib/systemd/system/$unit"
     done
 
-    # Packaged udev rules belong under /lib/udev/rules.d. /etc/udev/rules.d is
-    # the administrator's directory, and a file placed there by the same name
-    # overrides this one.
+    # Rules in /etc/udev/rules.d override the packaged rules.
     install -m 0644 "$SRC_DIR/deploy/99-$PKG.rules" "$root/lib/udev/rules.d/99-$PKG.rules"
 
-    # The simulated devices are the package's self-test, and config/hurd.sim.json
-    # is the herd that runs them. `alpacahurd -example-devices` seeds no file for
-    # them (a driver package seeds its own, and sims are skipped), so the ready-
-    # made config ships here instead:
-    #
-    #   alpacahurd -config /usr/share/doc/alpacahurd/examples/hurd.sim.json
+    # Ship the simulator configuration for installation checks.
     install -m 0644 "$SRC_DIR/config/hurd.sim.json" \
         "$root/usr/share/doc/$PKG/examples/hurd.sim.json"
     install -m 0644 "$SRC_DIR/config/hurd.example.json" \
@@ -263,9 +217,7 @@ License: MIT
 
 License: MIT
 EOF
-        # The license body is indented one space, and its blank lines become
-        # " ." — the Debian copyright format reads an unindented line as the
-        # start of the next field.
+        # Debian copyright continuations use indentation and " ." for blank lines.
         sed -e '1,/^$/d' -e 's/^$/./' -e 's/^/ /' "$SRC_DIR/LICENSE"
     } > "$1"
     chmod 0644 "$1"
@@ -281,10 +233,8 @@ $PKG ($version) unstable; urgency=medium
 EOF
 }
 
-# write_maintainer_scripts writes postinst, prerm and postrm into a DEBIAN
-# directory. They follow what deploy/install.sh does on a source install: the
-# config is generated by the binary on first configure and is not a dpkg
-# conffile, so an upgrade never prompts and never overwrites an edited file.
+# write_maintainer_scripts generates package lifecycle scripts.
+# Configuration is seeded on first install and preserved on upgrades.
 write_maintainer_scripts () {
     local d=$1
 
@@ -298,17 +248,12 @@ STATE_DIR=/var/lib/alpacahurd
 if [ "$1" = configure ]; then
 	mkdir -p "$CONF_DIR" "$STATE_DIR/devices"
 
-	# The server config carries the shared blocks and no devices. An
-	# existing file is kept, so an upgrade leaves an edited config alone.
 	if [ ! -f "$CONF_DIR/hurd.json" ]; then
 		/usr/bin/alpacahurd -example > "$CONF_DIR/hurd.json"
 		chmod 0644 "$CONF_DIR/hurd.json"
 	fi
 
-	# One disabled device file per compiled-in driver, beside the server
-	# config. Existing files are kept. This package compiles in the
-	# simulators only, so a fresh install seeds the sim-* entries and a
-	# driver package seeds its own.
+	# Preserve existing device files.
 	/usr/bin/alpacahurd -example-devices "$CONF_DIR/devices.d" || true
 
 	if [ -d /run/udev ]; then
@@ -339,8 +284,6 @@ EOF
 set -e
 
 if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
-	# Device instances are PartOf= the orchestrator and stop with it. An
-	# instance enabled from the orchestrator page is stopped here as well.
 	deb-systemd-invoke stop 'alpacahurd-device@*.service' >/dev/null 2>&1 || true
 	deb-systemd-invoke stop alpacahurd.service >/dev/null 2>&1 || true
 fi
@@ -356,8 +299,7 @@ case "$1" in
 purge)
 	deb-systemd-helper purge alpacahurd.service >/dev/null 2>&1 || true
 	deb-systemd-helper unmask alpacahurd.service >/dev/null 2>&1 || true
-	# purge removes what the package generated: the seeded configuration
-	# and the state the setup pages wrote. remove keeps both.
+	# Purge deletes generated configuration and state; remove keeps both.
 	rm -rf /etc/alpacahurd /var/lib/alpacahurd
 	;;
 esac

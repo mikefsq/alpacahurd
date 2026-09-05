@@ -13,12 +13,8 @@ import (
 	alpacadev "github.com/mikefsq/goalpaca/server"
 )
 
-// subSpecs expands a multi-device entry (a driver with a MultiKey, such as
-// astrocam's "cameras") into one spec per block: the block is the sub-entry's
-// Raw, its position is its device number, and its "name" and "enable" are its
-// own. A flat entry, or one whose driver is not compiled in, is returned
-// unchanged. A MultiKey entry with no blocks and no flat driver keys defaults
-// to two empty blocks.
+// subSpecs expands MultiKey blocks using their positions as device numbers.
+// Flat entries remain unchanged; an empty multi-device entry defaults to two blocks.
 func subSpecs(spec DeviceSpec) ([]DeviceSpec, error) {
 	drv, ok := registry.Lookup(spec.Driver)
 	if !ok || drv.MultiKey == "" {
@@ -57,20 +53,15 @@ func subSpecs(spec DeviceSpec) ([]DeviceSpec, error) {
 			off := false
 			sub.Enable = &off
 		}
-		// The block's driver keys are the admin's; setupFormFor re-derives
-		// the pinned set from the block itself.
+		// Recompute pinned fields from this block in setupFormFor.
 		sub.Pinned = nil
 		subs = append(subs, sub)
 	}
 	return subs, nil
 }
 
-// wireFrontEnd starts the driver's front-end (a mount's LX200 bridge) for
-// the device registered on srv at (drv.Type, num) and returns the stop
-// function that ends it. The front-end's context ends with stop or with ctx.
-// The getter resolves the current registration, so a reload's device swap is
-// followed. hosts are the addresses the Alpaca servers bind. A driver
-// without a front-end returns a no-op stop.
+// wireFrontEnd starts the optional driver front-end and returns its cancel function.
+// The device getter follows registration changes during reload.
 func wireFrontEnd(ctx context.Context, drv registry.Driver, srv *alpacadev.Server, num int, spec DeviceSpec, hosts []string) context.CancelFunc {
 	if drv.FrontEnd == nil {
 		return func() {}
@@ -86,15 +77,12 @@ func wireFrontEnd(ctx context.Context, drv registry.Driver, srv *alpacadev.Serve
 	return stop
 }
 
-// buildDevice constructs the device named by spec.Driver through the driver
-// registry. Construction touches no hardware; the device's hardware loop is
-// started later by its Alpaca server's Run.
+// buildDevice constructs a registered driver without opening hardware.
 func buildDevice(spec DeviceSpec) (registry.Driver, alpacadev.Device, error) {
 	drv, ok := registry.Lookup(spec.Driver)
 	if !ok {
 		switch strings.ToLower(spec.Driver) {
 		case "asiccd", "asicaa":
-			// The ZWO-SDK (cgo) devices are not part of the vendor-free herd.
 			return registry.Driver{}, nil, fmt.Errorf("%q needs the ZWO SDK (cgo) and is not built into alpacahurd; "+
 				"run its standalone cmd, or use the Go \"astrocam\" driver for ZWO cameras", spec.Driver)
 		}
@@ -112,15 +100,8 @@ func buildDevice(spec DeviceSpec) (registry.Driver, alpacadev.Device, error) {
 	return drv, dev, nil
 }
 
-// deviceNumbers hands out ASCOM device numbers for the entries sharing one
-// Alpaca port. Numbers are scoped per device type (the URL is
-// /api/v1/{type}/{number}/): a camera and a focuser on one port are both
-// device 0; two cameras there are 0 and 1.
-//
-// An entry pins its own number with "device"; the rest take the lowest free one
-// in config order. Numbers are claimed as the entries are walked, so pinning a
-// number an earlier unpinned entry already took is an error rather than a silent
-// reshuffle: pin ascending, or pin none.
+// deviceNumbers allocates numbers per ASCOM type on one port.
+// Entries claim numbers in order; a later pin cannot displace an earlier assignment.
 type deviceNumbers struct {
 	used map[alpacadev.DeviceType]map[int]bool
 }
@@ -161,8 +142,7 @@ func (n *deviceNumbers) assign(spec DeviceSpec, typ alpacadev.DeviceType) (int, 
 	return num, nil
 }
 
-// registerDevice constructs spec's device and registers it on srv under its
-// ASCOM type, at the device number nums hands out for it.
+// registerDevice constructs and registers a device with its setup form.
 func registerDevice(srv *alpacadev.Server, spec DeviceSpec, nums *deviceNumbers) (alpacadev.Device, int, error) {
 	drv, dev, err := buildDevice(spec)
 	if err != nil {
@@ -181,11 +161,7 @@ func registerDevice(srv *alpacadev.Server, spec DeviceSpec, nums *deviceNumbers)
 	return dev, num, nil
 }
 
-// attachSetupForm gives a device a generated browser setup form when its driver
-// supplies a Config struct and the device has no form of its own. Every key the
-// config entry names is a host-supplied value and renders locked, so the setup
-// page changes only what the entry left unset; the config file stays the
-// authority for what it says.
+// attachSetupForm registers a generated form unless the device supplies its own.
 func attachSetupForm(srv *alpacadev.Server, drv registry.Driver, dev alpacadev.Device, num int, spec DeviceSpec) error {
 	sc, err := setupFormFor(drv, dev, spec)
 	if err != nil {
@@ -194,14 +170,8 @@ func attachSetupForm(srv *alpacadev.Server, drv registry.Driver, dev alpacadev.D
 	if sc == nil {
 		return nil
 	}
-	// A devices.d entry persists setup-page changes to its own state file, the
-	// one the overlay reads back at the next start. An inline entry has no
-	// instance name and keeps the server's default path under the state dir.
-	// The blocks of a multi-device entry share the instance, so each block
-	// past the first gets its own file, suffixed by position (the same layout
-	// the standalone binary keeps). The path goes first: on a running server
-	// RegisterConfigurable applies the persisted settings at once, from the
-	// key set by then.
+	// Set the path before RegisterConfigurable loads persisted settings.
+	// Multi-device blocks after the first use a position suffix.
 	if spec.Instance != "" {
 		stem := spec.Instance
 		if spec.Block != nil && *spec.Block > 0 {
@@ -214,9 +184,7 @@ func attachSetupForm(srv *alpacadev.Server, drv registry.Driver, dev alpacadev.D
 	return srv.RegisterConfigurable(drv.Type, num, sc)
 }
 
-// setupFormFor builds the generated form for dev, or nil when the driver has
-// no Config struct or the device has a form of its own. It is what
-// attachSetupForm registers and what a reload rebuilds.
+// setupFormFor builds a generated form, or returns nil if none is needed.
 func setupFormFor(drv registry.Driver, dev alpacadev.Device, spec DeviceSpec) (alpacadev.Configurable, error) {
 	if drv.Config == nil {
 		return nil, nil
@@ -239,15 +207,8 @@ func setupFormFor(drv registry.Driver, dev alpacadev.Device, spec DeviceSpec) (a
 	return sc, nil
 }
 
-// reloaderFor returns the Reloader for a compiled-in device: it re-reads the
-// entry's device file with its state overlay (an inline entry has no file of
-// its own and is rebuilt from the entry as loaded), constructs the device
-// again through the same registry driver, and rebuilds its setup form. The
-// server closes the old hardware and opens the new.
-//
-// The entry has to still name the same driver and be enabled; a change of
-// driver or a disabled entry is a restart matter, since the device's type and
-// number are fixed for the server's lifetime.
+// reloaderFor rebuilds a device and its form from the current file and state.
+// Inline entries use the loaded spec. Driver changes and disabled entries require a restart.
 func reloaderFor(spec DeviceSpec) alpacadev.Reloader {
 	return func(context.Context) (alpacadev.Device, alpacadev.Configurable, error) {
 		cur := spec
@@ -258,8 +219,6 @@ func reloaderFor(spec DeviceSpec) alpacadev.Reloader {
 			}
 			cur = fresh
 			if spec.Block != nil {
-				// The device is one block of a multi-device entry: re-expand
-				// and take the block at the same position.
 				subs, err := subSpecs(fresh)
 				if err != nil {
 					return nil, nil, err
@@ -288,9 +247,7 @@ func reloaderFor(spec DeviceSpec) alpacadev.Reloader {
 	}
 }
 
-// pinnedKeys returns the driver-owned keys present in a config entry, which
-// are the ones the host pinned. Common keys are the host's own and never reach
-// a driver's form, so they are left out.
+// pinnedKeys returns the driver-owned keys present in a config entry.
 func pinnedKeys(raw json.RawMessage) map[string]bool {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(raw, &m) != nil {

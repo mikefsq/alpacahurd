@@ -16,37 +16,20 @@ import (
 	alpacadev "github.com/mikefsq/goalpaca/server"
 )
 
-// serverName is the name every alpacahurd server registers under; it selects
-// the config, state, and log directories.
+// serverName selects the config, state, and log directories.
 const serverName = "alpacahurd"
 
 // stateDirRoot is the resolved state directory for this host.
 func stateDirRoot() string { return alpacadev.StateDir(serverName) }
 
-// Device entries come from two places. The inline "devices" array in hurd.json
-// is the original layout and still works. The devices.d directory beside
-// hurd.json holds one JSON object per file, and is the layout the setup page
-// and the packaging plan build on. Both feed the same DeviceSpec.
-//
-// A devices.d entry has two layers. The admin file under the config directory
-// (/etc/alpacahurd/devices.d/<name>.json) says what the admin decided; every
-// driver-owned key it names is pinned. The state file under the state
-// directory (/var/lib/alpacahurd/devices/<name>.json) holds what the setup page
-// wrote; its keys fill in whatever the admin file left unset and never override
-// a pinned key. The overlay of the two is the entry's effective config.
-
 // devicesSubdir is the directory beside hurd.json holding one device per file.
 const devicesSubdir = "devices.d"
 
-// stateDevicesSubdir is the directory under the state dir holding the setup
-// page's per-device writes, mirroring devices.d by filename.
+// stateDevicesSubdir holds per-device state files.
 const stateDevicesSubdir = "devices"
 
-// loadDevicesDir reads every *.json file in dir as one device entry, in name
-// order, with the filename stem as the entry's Instance. A missing dir yields
-// no entries and no error, since a fresh install may not have one. stateDir,
-// when non-empty, is overlaid: the file of the same name there supplies keys the
-// admin file left unset.
+// loadDevicesDir loads device files and state overlays in filename order.
+// A missing directory returns no entries.
 func loadDevicesDir(dir, stateDir string) ([]DeviceSpec, error) {
 	names, err := filepath.Glob(filepath.Join(dir, "*.json"))
 	if err != nil {
@@ -93,26 +76,13 @@ func loadDeviceFile(path, stateDir string) (DeviceSpec, error) {
 	return spec, nil
 }
 
-// readJSONObject reads a file holding one JSON object, with // and /* */
-// comments allowed (devicemain.ReadDeviceFile), so a seeded file can document
-// every key at its default. A missing file returns os.ErrNotExist so a caller
-// can treat absence as empty.
+// readJSONObject reads a JSON object with line and block comments.
 func readJSONObject(path string) (map[string]json.RawMessage, error) {
 	return devicemain.ReadDeviceFile(path)
 }
 
-// overlay merges a state file over an admin file. Every key in the admin file
-// wins and, when driver-owned, is pinned. A state key absent from the admin
-// file is taken. Common keys (driver, port, name, and the rest of
-// registry.CommonKeys) are the host's own and never pinned for the driver's
-// form, since they never reach it.
-//
-// One key runs the other way: a state "enable" wins over the admin file's.
-// The seeded file writes "enable": false as its one live line, so the admin
-// value is the installer's default rather than a decision, and the operator's
-// switch on the orchestrator page (which writes the state file) has to take
-// effect over it. An admin who wants a device kept off removes its state file
-// or the device file.
+// overlay merges state and admin settings, returning pinned driver keys.
+// Admin values win except enable, which uses the state value when present.
 func overlay(admin, state map[string]json.RawMessage) (merged map[string]json.RawMessage, pinned map[string]bool) {
 	merged = make(map[string]json.RawMessage, len(admin)+len(state))
 	for k, v := range state {
@@ -133,8 +103,7 @@ func overlay(admin, state map[string]json.RawMessage) (merged map[string]json.Ra
 	return merged, pinned
 }
 
-// writeStateEnable records the operator's enable switch for a devices.d entry
-// in its state file, where the overlay reads it back at the next start.
+// writeStateEnable persists the enable switch for a devices.d entry.
 func writeStateEnable(instance string, on bool) error {
 	store := alpacadev.NewFileStore()
 	path := filepath.Join(stateDevicesDir(), instance+".json")
@@ -164,16 +133,12 @@ func devicesDirFor(cfgPath string) string {
 	return filepath.Join(filepath.Dir(cfgPath), devicesSubdir)
 }
 
-// stateDevicesDir returns the directory the setup page writes per-device state
-// files to, under the resolved state directory.
+// stateDevicesDir returns the directory for per-device state files.
 func stateDevicesDir() string {
 	return filepath.Join(stateDirRoot(), stateDevicesSubdir)
 }
 
-// portScanBase is where a devices.d entry with no port starts scanning. It sits
-// above the example configs' 11200 block so a scanned port never collides with
-// a documented fixed one. Each scanning entry gets its own window of
-// portScanSpan ports above the base, so several can scan at once.
+// portScanBase starts automatic port allocation. Each server gets a portScanSpan window.
 const (
 	portScanBase = 11300
 	portScanSpan = 10
@@ -186,9 +151,7 @@ type scanEntry struct {
 	spec DeviceSpec
 }
 
-// waitBound waits until every server reports a bound port, or one of them
-// fails, and returns the ports in server order. A server that exits before
-// binding surfaces its error here rather than as a silent hang.
+// waitBound returns bound ports in server order, or the first startup error.
 func waitBound(ctx context.Context, servers []*alpacadev.Server, errc <-chan error) ([]int, error) {
 	ports := make([]int, len(servers))
 	deadline := time.After(10 * time.Second)
@@ -221,13 +184,8 @@ func waitBound(ctx context.Context, servers []*alpacadev.Server, errc <-chan err
 	}
 }
 
-// persistBoundPorts records each devices.d entry's bound port in its state
-// file, so state describes the port the device is on. A scanned port is written
-// on the first start and holds from then; a port the admin file pins is bound
-// and the state file is brought to match, so a stale recorded port from before
-// the pin does not linger. A state file already naming the bound port is left
-// untouched. Inline entries have no state file and are skipped. The write is
-// atomic (FileStore).
+// persistBoundPorts updates device state with the bound ports.
+// Inline entries and unchanged ports are skipped.
 func persistBoundPorts(rows []boundEntry) {
 	store := alpacadev.NewFileStore()
 	for _, e := range rows {

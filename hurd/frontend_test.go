@@ -46,10 +46,6 @@ func init() {
 	})
 }
 
-// TestFrontEndLifecycle: enabling a device wires its driver front-end with
-// the device's own context, the entry, and the hosts the Alpaca servers bind;
-// disabling cancels that context before the device is unregistered; a second
-// enable wires a fresh front-end.
 func TestFrontEndLifecycle(t *testing.T) {
 	t.Setenv("ALPACA_STATE_DIR", t.TempDir())
 	root := t.TempDir()

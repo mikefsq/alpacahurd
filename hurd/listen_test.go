@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// TestResolveListenInterfaceBindsBothStacks is the regression guard for the bug
-// where "listen": ["<ipv4>"] silently dropped IPv6: naming an interface must
-// resolve to both an IPv4 and an IPv6 address, and each must be bindable.
 func TestResolveListenInterfaceBindsBothStacks(t *testing.T) {
 	lo := loopbackName(t)
 	addrs, ifaces, err := resolveListen([]string{lo})
@@ -40,8 +37,6 @@ func TestResolveListenInterfaceBindsBothStacks(t *testing.T) {
 	}
 }
 
-// TestResolveListenIPLiteralIsSingleStack documents that a bare IPv4 literal binds
-// IPv4 only, the case that motivated interface-name support.
 func TestResolveListenIPLiteralIsSingleStack(t *testing.T) {
 	addrs, _, err := resolveListen([]string{"127.0.0.1"})
 	if err != nil {
@@ -52,8 +47,7 @@ func TestResolveListenIPLiteralIsSingleStack(t *testing.T) {
 	}
 }
 
-// loopbackName returns the loopback interface's name, skipping the test if none has
-// both stacks (every real OS loopback has 127.0.0.1 and ::1).
+// loopbackName returns a dual-stack loopback interface or skips the test.
 func loopbackName(t *testing.T) string {
 	t.Helper()
 	ifs, _ := net.Interfaces()

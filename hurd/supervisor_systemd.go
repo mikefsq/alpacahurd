@@ -8,10 +8,7 @@ import (
 	"strings"
 )
 
-// systemdUnitTemplate is the template unit deploy/alpacahurd-device@.service,
-// instantiated per device instance as alpacahurd-device@<instance>.service.
-// It runs `alpacahurd -launch %i`, so no per-instance file exists on disk and
-// Install has nothing to write.
+// systemdUnitTemplate is instantiated once per device file.
 const systemdUnitTemplate = "alpacahurd-device@"
 
 // systemdSupervisor drives systemd over systemctl and journalctl.
@@ -27,16 +24,12 @@ func newSystemdSupervisor(run runner, self, cfgPath string) *systemdSupervisor {
 
 func (s *systemdSupervisor) Name() string { return "systemd" }
 
-// unit is the instance's unit name. A device instance is a filename stem and
-// systemd escapes some characters in instance names; the stems the seeded
-// files use (letters, digits, dash) pass through unchanged.
+// unit returns the systemd unit name for an instance.
 func (s *systemdSupervisor) unit(instance string) string {
 	return systemdUnitTemplate + instance + ".service"
 }
 
-// Status reads the unit's properties. A unit whose template is not installed
-// reports Installed false; the properties of an instance that has never been
-// started still resolve through the template.
+// Status reads instance properties, including those inherited from the template.
 func (s *systemdSupervisor) Status(ctx context.Context, instance string) (InstanceStatus, error) {
 	out, err := s.run(ctx, "systemctl", "show", s.unit(instance),
 		"--property=LoadState,ActiveState,SubState,UnitFileState,MainPID,Result")
@@ -60,8 +53,7 @@ func (s *systemdSupervisor) Status(ctx context.Context, instance string) (Instan
 	return st, nil
 }
 
-// Install confirms the template unit is present and reloads systemd so a
-// freshly installed template is seen. There is no per-instance file.
+// Install reloads systemd and verifies the device unit template.
 func (s *systemdSupervisor) Install(ctx context.Context, instance string) error {
 	out, err := s.run(ctx, "systemctl", "cat", systemdUnitTemplate+".service")
 	if err != nil {

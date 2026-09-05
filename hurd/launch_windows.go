@@ -13,11 +13,8 @@ import (
 	"golang.org/x/sys/windows/svc"
 )
 
-// execDriver runs the driver binary as a child. Under the SCM this process is
-// the service, so it answers the SCM's control requests and stops the child on
-// Stop and Shutdown; from a console it waits for the child and returns its
-// exit. The child's output goes to <LogDir>/<service>.log under the SCM and to
-// this process's stdout and stderr from a console.
+// execDriver runs a child process, forwarding console I/O or serving SCM requests.
+// Under SCM, output goes to the instance log and Stop terminates the child.
 func execDriver(exe string, args []string) error {
 	isService, err := svc.IsWindowsService()
 	if err != nil {
@@ -32,8 +29,7 @@ func execDriver(exe string, args []string) error {
 	return svc.Run(name, &driverHost{exe: exe, args: args, name: name})
 }
 
-// instanceFromArgs recovers the instance from the -config file the driver is
-// launched with, for the log file name.
+// instanceFromArgs returns the device filename stem from -config.
 func instanceFromArgs(args []string) string {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == "-config" {
@@ -44,10 +40,7 @@ func instanceFromArgs(args []string) string {
 	return "device"
 }
 
-// driverHost is the SCM handler: it starts the child, reports Running, and
-// on Stop or Shutdown kills the child and reports Stopped. The child has no
-// console, so there is no gentler signal to send it than Kill; the driver's
-// hardware handle is released by the OS.
+// driverHost runs a driver as an SCM service child.
 type driverHost struct {
 	exe  string
 	args []string
@@ -77,8 +70,7 @@ func (h *driverHost) Execute(_ []string, req <-chan svc.ChangeRequest, status ch
 	for {
 		select {
 		case err := <-exited:
-			// The child ended on its own: report a failure so the SCM's
-			// recovery options restart the service.
+			// Report failure so SCM recovery restarts the service.
 			fmt.Fprintf(logFile, "%s alpacahurd: %s exited: %v\n", time.Now().Format(time.RFC3339), h.exe, err)
 			status <- svc.Status{State: svc.Stopped}
 			return true, 1

@@ -34,25 +34,18 @@ mkdir -p "$CONF_DIR"
 if [[ -f "$CONF_DST" ]]; then
 	echo "keeping existing config $CONF_DST"
 else
-	# Seed the server config: the server blocks and no inline devices.
 	"$BIN_DST" -example >"$CONF_DST"
 	chmod 0644 "$CONF_DST"
 	echo "installed server config -> $CONF_DST"
 fi
-# Seed one disabled device file per compiled-in driver beside it. Files that
-# already exist are kept, so a re-install never overwrites an edited entry.
-# Enable the ones you have, fill in serials/addresses, and restart.
+# Preserve existing device files.
 "$BIN_DST" -example-devices "$DEVICES_DIR"
 echo "device files -> $DEVICES_DIR/   *** EDIT THESE for your hardware ***"
-# The state directory holds what the setup pages write (one file per device,
-# under devices/). systemd creates it from StateDirectory= in the unit; make it
-# here too so a first start before daemon-reload finds it.
+# Create state storage before the service starts.
 mkdir -p "$STATE_DIR/devices"
 
 echo "installing unit -> $UNIT_DST"
 install -m 0644 "$HERE/deploy/alpacahurd.service" "$UNIT_DST"
-# The template unit for devices running as separate binaries; alpacahurd
-# instantiates it per device file from its orchestrator page.
 install -m 0644 "$HERE/deploy/alpacahurd-device@.service" /etc/systemd/system/alpacahurd-device@.service
 
 echo "installing udev rules -> $RULES_DST"

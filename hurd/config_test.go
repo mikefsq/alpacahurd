@@ -13,9 +13,6 @@ import (
 )
 
 func TestResolveConfigPath(t *testing.T) {
-	// An explicit -config value always wins and is returned verbatim (not
-	// stat'd), so an explicit path that doesn't exist still surfaces as a
-	// LoadConfig read error.
 	if got, err := resolveConfigPath("/some/explicit.json"); err != nil || got != "/some/explicit.json" {
 		t.Fatalf("explicit: got %q, %v; want /some/explicit.json", got, err)
 	}
@@ -77,8 +74,6 @@ func TestLoadConfig(t *testing.T) {
 		t.Fatalf("device Raw not preserved: %s", cfg.Devices[1].Raw)
 	}
 
-	// Unknown TOP-LEVEL field is rejected (catches config typos). Unknown keys
-	// inside a device entry are the driver's strict Decode's job instead.
 	bad := filepath.Join(dir, "bad.json")
 	if err := os.WriteFile(bad, []byte(`{"prt":1,"devices":[]}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -88,11 +83,52 @@ func TestLoadConfig(t *testing.T) {
 	}
 }
 
-// TestCommonKeysMatchRegistry keeps the engine's deviceCommon in lock-step with
-// registry.CommonKeys: the registry strips these keys before a driver's
-// strict decode, so a field added on one side but not the other either leaks an
-// engine key into driver decodes (spurious "unknown field") or silently drops a
-// driver key from them.
+func TestLoadConfigJSONC(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hurd.json")
+	const body = `// Server settings
+{
+  "discovery": "off", /* No discovery */
+  "devices": [
+    {
+      // Inline device settings
+      "driver": "sim-focuser",
+      "name": "http://host/*literal*/"
+    }
+  ]
+} // End of configuration
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Discovery != "off" || len(cfg.Devices) != 1 {
+		t.Fatalf("parsed config wrong: %+v", cfg)
+	}
+	if got := cfg.Devices[0].Name; got != "http://host/*literal*/" {
+		t.Fatalf("name = %q; comment markers in strings must be preserved", got)
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"unknown field", "{/* comment */\"discovry\":\"off\"}"},
+		{"trailing comma", "{\"discovery\":\"off\", /* comment */}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadConfig(path); err == nil {
+				t.Fatal("invalid configuration was accepted")
+			}
+		})
+	}
+}
+
 func TestCommonKeysMatchRegistry(t *testing.T) {
 	var engine []string
 	rt := reflect.TypeFor[deviceCommon]()
@@ -104,9 +140,7 @@ func TestCommonKeysMatchRegistry(t *testing.T) {
 		}
 		engine = append(engine, name)
 	}
-	// registry.CommonKeys keeps the removed front-ends' keys (indi, lx200Port,
-	// the optics block, guideRate) so drivers still strip them from old files;
-	// the hurd reads only a subset of them.
+	// Front-end keys are reserved by the registry but read by drivers.
 	shared := map[string]bool{}
 	for _, k := range registry.CommonKeys() {
 		shared[k] = true
@@ -118,9 +152,7 @@ func TestCommonKeysMatchRegistry(t *testing.T) {
 	}
 }
 
-// chdir enters dir for the duration of the test and restores the prior working
-// directory afterward. It is the pre-1.24 equivalent of testing.T.Chdir, so the
-// module builds and tests on Go 1.23.
+// chdir changes the working directory until test cleanup.
 func chdir(t *testing.T, dir string) {
 	t.Helper()
 	prev, err := os.Getwd()

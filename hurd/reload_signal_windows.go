@@ -4,6 +4,5 @@ package hurd
 
 import "context"
 
-// onReloadSignal is a no-op on Windows, which has no SIGHUP; a reload there
-// comes through the orchestrator page or a device's setup page.
+// onReloadSignal does nothing on Windows, which has no SIGHUP.
 func onReloadSignal(context.Context, func()) {}

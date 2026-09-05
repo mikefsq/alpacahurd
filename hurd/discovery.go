@@ -20,13 +20,8 @@ const (
 	discoveryV6Group = "ff12::00a1:9aca" // IPv6 discovery multicast group
 )
 
-// responder answers discovery probes for the herd: the in-process device ports
-// it was built with, plus whatever Register-mode devices have registered over
-// the same socket. A registered device on this host is answered for directly;
-// one on another host is relayed to, so its reply carries its own address (see
-// goalpaca's DISCOVERY_RELAY.md). onRegister, when set, is called for every
-// heartbeat, which is how the orchestrator page learns a separate binary's
-// bound port.
+// responder advertises local device ports and relays probes to remote devices.
+// onRegister receives each heartbeat.
 type responder struct {
 	mu         sync.Mutex // guards static and staticSet: addPort runs while probes are served
 	static     [][]byte   // one {"AlpacaPort":N} per in-process port
@@ -35,8 +30,7 @@ type responder struct {
 	onRegister func(*alpacadev.Registration)
 }
 
-// addPort adds an in-process port bound after start (a device enabled from
-// the orchestrator page onto a new server).
+// addPort adds an in-process port to discovery replies.
 func (r *responder) addPort(p int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -78,9 +72,8 @@ func (r *responder) replies() [][]byte {
 	return out
 }
 
-// handle processes one datagram: a probe draws the replies and a relay to
-// every remote registration; a heartbeat is recorded. The relay runs off the
-// read loop, since it waits on remote HTTP and heartbeats keep arriving.
+// handle answers probes and records heartbeats.
+// Remote relays run asynchronously to keep receiving heartbeats.
 func (r *responder) handle(ctx context.Context, c *net.UDPConn, src net.Addr, pkt []byte) {
 	ua, _ := src.(*net.UDPAddr)
 	if ua == nil {
@@ -114,11 +107,8 @@ func registrationLabel(e alpacadev.Registration) string {
 	return e.UniqueID
 }
 
-// runDiscovery answers Alpaca discovery probes on UDP 32227 through r. The socket
-// is bound with SO_REUSEADDR/SO_REUSEPORT so it co-binds alongside other Alpaca
-// servers on 32227. When ifaces is non-empty (i.e. "listen" scopes the herd),
-// discovery answers only on those interfaces; a nil/empty ifaces answers on every
-// interface.
+// runDiscovery serves IPv4 discovery on UDP 32227, sharing the port with other servers.
+// A non-empty ifaces restricts replies to those interfaces.
 func runDiscovery(ctx context.Context, r *responder, ipv6 bool, ifaces map[int]bool) error {
 	lc := net.ListenConfig{Control: alpacadev.ReuseControl}
 	pc, err := lc.ListenPacket(ctx, "udp4", fmt.Sprintf("0.0.0.0:%d", discoveryPort))
@@ -135,10 +125,8 @@ func runDiscovery(ctx context.Context, r *responder, ipv6 bool, ifaces map[int]b
 	return nil
 }
 
-// listenV6 answers Alpaca IPv6 discovery probes. It binds one [::]:32227 socket and
-// joins the Alpaca multicast group on every up, multicast-capable interface, so the
-// herd is discoverable on all links. Best-effort: a per-interface join failure is
-// skipped; only a total failure returns an error and leaves IPv4 discovery running.
+// listenV6 joins the discovery multicast group on eligible interfaces.
+// Individual join failures are skipped; total failure leaves IPv4 discovery running.
 func listenV6(ctx context.Context, lc net.ListenConfig, r *responder, ifaces map[int]bool) error {
 	pc, err := lc.ListenPacket(ctx, "udp6", fmt.Sprintf("[::]:%d", discoveryPort))
 	if err != nil {
@@ -170,16 +158,12 @@ func listenV6(ctx context.Context, lc net.ListenConfig, r *responder, ifaces map
 	return nil
 }
 
-// serveDiscovery reads datagrams on c and hands each to r. When ifaces is
-// non-empty it acts only on datagrams that arrived on one of those interfaces
-// (so a "listen"-scoped herd does not advertise on interfaces it isn't serving);
-// a nil ifaces answers on all.
+// serveDiscovery handles datagrams on c until ctx ends.
+// A non-empty ifaces filters incoming interfaces when the OS supports it.
 func serveDiscovery(ctx context.Context, c *net.UDPConn, r *responder, ifaces map[int]bool) {
 	defer c.Close()
 
-	// Interface-scoped path: read the inbound interface via a control message and
-	// drop probes from interfaces we don't listen on. Falls back to answering all if
-	// the OS won't report the inbound interface.
+	// Fall back to unfiltered replies if interface control messages are unavailable.
 	var p *ipv4.PacketConn
 	if len(ifaces) > 0 {
 		p = ipv4.NewPacketConn(c)

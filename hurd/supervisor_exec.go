@@ -9,12 +9,9 @@ import (
 	"strings"
 )
 
-// A runner executes a platform command and returns its combined output. The
-// supervisors call the platform tool through it, and the tests substitute a
-// fake that records the command lines and answers with canned output.
+// runner executes a platform command and returns its combined output.
 type runner func(ctx context.Context, name string, args ...string) (string, error)
 
-// execRunner runs the command for real.
 func execRunner(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	out, err := cmd.CombinedOutput()
@@ -28,17 +25,13 @@ func execRunner(ctx context.Context, name string, args ...string) (string, error
 	return s, nil
 }
 
-// launchCommand is the command line every supervisor runs for an instance:
-// this binary, -launch, and the config file, so the platform record never
-// names a driver binary. self is os.Executable at startup.
+// launchCommand builds the alpacahurd -launch command for an instance.
 func launchCommand(self, cfgPath, instance string) []string {
 	return []string{self, "-launch", instance, "-config", cfgPath}
 }
 
-// platformSupervisor returns the Supervisor for this host: systemd where it is
-// the init, launchd on macOS, the SCM on Windows, and noSupervisor elsewhere or
-// when the platform tool is not on PATH. cfgPath is the config file the
-// launched processes read.
+// platformSupervisor selects systemd, launchd, or SCM when available.
+// It falls back to noSupervisor.
 func platformSupervisor(cfgPath string) Supervisor {
 	self, err := os.Executable()
 	if err != nil {

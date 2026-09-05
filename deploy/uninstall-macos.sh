@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # uninstall-macos.sh — stop and remove the alpacahurd launchd daemon and binary.
-# The config in /Library/Application Support/alpacahurd is kept (delete it yourself if you mean it).
+# The config in /Library/Application Support/alpacahurd is kept.
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then

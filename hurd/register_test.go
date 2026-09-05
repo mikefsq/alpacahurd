@@ -19,10 +19,7 @@ type cfgDev struct {
 	UniqueID     string
 }
 
-// serveSpecs registers config entries on one fresh server, as serve does for
-// entries sharing a port, and returns the live base URL. Registration does not
-// open hardware (that happens in srv.Run, which we don't call), so this
-// exercises construction + dispatch without any devices attached.
+// serveSpecs registers devices without opening hardware and returns the test server URL.
 func serveSpecs(t *testing.T, entries ...string) string {
 	t.Helper()
 	srv := alpacadev.New(alpacadev.Config{
@@ -39,8 +36,7 @@ func serveSpecs(t *testing.T, entries ...string) string {
 	return ts.URL
 }
 
-// serveSpec is serveSpecs for the single-device case (the common one device per
-// port layout).
+// serveSpec serves one device without opening hardware.
 func serveSpec(t *testing.T, entry string) string {
 	t.Helper()
 	return serveSpecs(t, entry)
@@ -60,10 +56,6 @@ func configured(t *testing.T, base string) []cfgDev {
 	return out.Value
 }
 
-// TestRegistryDriversServe: every hardware driver constructs from a config entry
-// through the registry and serves as device 0 of its ASCOM type on its
-// own server: the per-port model, where a client (PHD2) asking for <type>/0
-// must always be right.
 func TestRegistryDriversServe(t *testing.T) {
 	cases := []struct {
 		entry, wantType string
@@ -96,10 +88,6 @@ func TestRegistryDriversServe(t *testing.T) {
 	}
 }
 
-// TestSharedPortNumbersDevices: entries naming the same port land on one server
-// as device 0, 1, … of their type: the layout a client that shows one Alpaca
-// server per address (ZWO's ASIStudio) needs to see two cameras at once.
-// Numbering is per ASCOM type, so a focuser alongside them is still device 0.
 func TestSharedPortNumbersDevices(t *testing.T) {
 	base := serveSpecs(t,
 		`{"driver":"astrocam","serial":"aaaa","name":"Main"}`,
@@ -121,8 +109,6 @@ func TestSharedPortNumbersDevices(t *testing.T) {
 			t.Errorf("device %d = %+v, want %s %s/%d", i, devs[i], w.DeviceName, w.DeviceType, w.DeviceNumber)
 		}
 	}
-	// Both cameras answer on their own URL, so the numbering is real dispatch and
-	// not just a management listing.
 	for i, name := range []string{"Main", "Guide"} {
 		r, err := http.Get(fmt.Sprintf("%s/api/v1/camera/%d/name", base, i))
 		if err != nil {
@@ -143,8 +129,6 @@ func TestSharedPortNumbersDevices(t *testing.T) {
 	}
 }
 
-// TestSharedPortPinnedNumbers: "device" pins a number, so disabling or reordering
-// entries cannot renumber a device out from under a client that stored its URL.
 func TestSharedPortPinnedNumbers(t *testing.T) {
 	devs := configured(t, serveSpecs(t,
 		`{"driver":"astrocam","serial":"aaaa","name":"Main","device":3}`,
@@ -155,8 +139,6 @@ func TestSharedPortPinnedNumbers(t *testing.T) {
 	}
 }
 
-// TestSharedPortNumberCollision: a pinned number an earlier entry already took is
-// an error, not a silent reshuffle.
 func TestSharedPortNumberCollision(t *testing.T) {
 	nums := &deviceNumbers{}
 	srv := alpacadev.New(alpacadev.Config{
@@ -171,8 +153,6 @@ func TestSharedPortNumberCollision(t *testing.T) {
 	}
 }
 
-// TestSpecNameOverride: the common "name" key overrides the device display name
-// for every driver, hardware and sim alike.
 func TestSpecNameOverride(t *testing.T) {
 	for _, entry := range []string{
 		`{"driver":"astrocam","serial":"x","name":"My Cam"}`,
@@ -198,7 +178,6 @@ func TestBuildDeviceErrors(t *testing.T) {
 		{`{"driver":"focuscube","maxstep":"lots"}`, "maxstep"},
 		// Unknown driver: point at -drivers/hurd.conf.
 		{`{"driver":"nope"}`, "hurd.conf"},
-		// The cgo ZWO-SDK devices are deliberately not in the herd.
 		{`{"driver":"asiccd"}`, "ZWO SDK"},
 	}
 	for _, c := range cases {
@@ -209,8 +188,6 @@ func TestBuildDeviceErrors(t *testing.T) {
 	}
 }
 
-// TestCommonKeysReachDrivers: engine-owned keys in an entry never leak into the
-// driver's strict decode (no spurious "unknown field"), whatever their case.
 func TestCommonKeysReachDrivers(t *testing.T) {
 	entry := `{"driver":"asieaf","Name":"N","enable":true,"port":1,"indi":false,"lx200Port":0,
 		"aperture":1,"apertureArea":1,"focalLength":1,"guiderAperture":1,"guiderFocalLength":1,
@@ -220,9 +197,6 @@ func TestCommonKeysReachDrivers(t *testing.T) {
 	}
 }
 
-// TestSetupFormFromRegistry: a driver that supplies a Config struct gets a
-// generated setup form through registerDevice with no form code of its own,
-// and every key the config entry names renders locked.
 func TestSetupFormFromRegistry(t *testing.T) {
 	base := serveSpec(t, `{"driver":"astrocam","serial":"deadbeef","fixdefects":true,"name":"Main"}`)
 	r, err := http.Get(base + "/setup/v1/camera/0/setup")

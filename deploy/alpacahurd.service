@@ -1,45 +1,23 @@
 [Unit]
 Description=alpacahurd — a herd of ASCOM Alpaca device drivers (mounts, cameras, focusers, filter wheels, observing conditions)
 Documentation=https://github.com/mikefsq/alpacahurd
-# Wait for the network so discovery binds and networked mounts are reachable.
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-# Report the config before starting, so the journal carries a readable table
-# of every device. It exits non-zero only when the server itself cannot start.
-# An entry with an error is reported, skipped at start, and shown on the
-# orchestrator page beside its switch; the rest of the herd serves.
+# Configuration checks report device errors without blocking other devices.
 ExecStartPre=/usr/local/bin/alpacahurd -check -config /etc/alpacahurd/hurd.json
 ExecStart=/usr/local/bin/alpacahurd -config /etc/alpacahurd/hurd.json
-# systemctl reload: every device re-reads its file and reopens its hardware,
-# ports kept. A port change or a new device is a restart.
 ExecReload=/bin/kill -HUP $MAINPID
-# Restart if the process exits non-zero. A device goroutine panic takes the
-# shared process down; systemd is the recovery net.
 Restart=on-failure
 RestartSec=5
 
-# Device access. Running as root is the simplest path on a dedicated Pi: it can
-# open USB (usbfs), serial (/dev/tty*), and hidraw without extra plumbing.
-# To harden, create a service user and grant the device groups instead of root:
-#   sudo useradd --system --no-create-home alpacahurd
-#   sudo usermod -aG dialout,plugdev alpacahurd     # serial + USB/HID
-# then the shipped udev rules give plugdev access to the relevant idVendors; set:
-#   User=alpacahurd
-#   SupplementaryGroups=dialout plugdev
+# Root permits device service management and hardware access.
 User=root
 
-# Writable state: what the setup pages change, one file per device under
-# devices/. systemd creates /var/lib/alpacahurd owned by the service user and
-# exports $STATE_DIRECTORY, which the program reads first.
 StateDirectory=alpacahurd
-# Admin config lives under /etc/alpacahurd (hurd.json and devices.d/); the
-# program reads $CONFIGURATION_DIRECTORY when set, so this pins the location.
 ConfigurationDirectory=alpacahurd
-
-# Alpaca HTTP serves on each device's config "port"; discovery answers UDP 32227.
 
 [Install]
 WantedBy=multi-user.target

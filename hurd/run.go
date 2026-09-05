@@ -15,13 +15,7 @@ import (
 	alpacadev "github.com/mikefsq/goalpaca/server"
 )
 
-// version is the hurd's own version, reported to Alpaca clients as
-// ManufacturerVersion and shown on the orchestrator page. A packaged build
-// stamps the release over it:
-//
-//	go build -ldflags "-X github.com/mikefsq/alpacahurd/hurd.version=v1.2.3"
-//
-// The linker can only write a var, so this is not a const.
+// version is reported to clients and stamped by release builds with -ldflags -X.
 var version = "v0.1.0"
 
 // built pairs a configured device spec with the constructed driver.
@@ -31,28 +25,20 @@ type built struct {
 	num  int // ASCOM device number on its port
 }
 
-// Main is the alpacahurd entry point: it parses flags and either serves the
-// configured herd or runs one of the introspection modes (-drivers, -example,
-// -check) and exits.
+// Main parses flags and runs the herd or the requested CLI command.
 func Main() {
 	cfgPath := flag.String("config", "",
-		"path to the device config JSON file (default: search ./hurd.json, "+
-			"$XDG_CONFIG_HOME/alpacahurd/hurd.json, /etc/alpacahurd/hurd.json; or $ALPACAHURD_CONFIG)")
+		"server config path (default: ALPACAHURD_CONFIG, then current and platform config directories)")
 	listDrivers := flag.Bool("drivers", false,
-		"list the drivers compiled into this binary and exit")
+		"list compiled-in drivers and exit")
 	example := flag.Bool("example", false,
-		"print a starter device config assembled from every compiled-in driver and exit; "+
-			"name a driver as an argument (alpacahurd -example astrocam) for just its entry")
+		"print server settings, or a device entry with -example <driver>, and exit")
 	check := flag.Bool("check", false,
-		"load the config and construct every enabled device (no hardware is touched), "+
-			"report problems, and exit non-zero when the server cannot start; an entry "+
-			"with an error is reported but skipped at start, so it does not fail the check")
+		"check config without hardware access; only server-fatal errors exit nonzero")
 	exampleDevices := flag.String("example-devices", "",
-		"write one disabled example device file per compiled-in driver into this directory "+
-			"(the devices.d beside hurd.json) and exit; existing files are kept")
+		"write disabled hardware driver templates to this directory, preserving existing files")
 	launchInstance := flag.String("launch", "",
-		"run one device (a devices.d file's stem) as a separate process for the platform supervisor: "+
-			"resolve its driver to the installed binary and replace this process with it")
+		"launch a device instance (its devices.d filename stem) through an installed driver binary")
 	flag.Parse()
 
 	switch {
@@ -82,10 +68,7 @@ func Main() {
 
 	if *launchInstance != "" {
 		if err := launch(resolvedCfg, cfg, *launchInstance); err != nil {
-			// A launch that fails here never reached the driver: the entry is
-			// missing, its driver is compiled in, or its binary is gone. That
-			// is a config mismatch a retry cannot fix, so exit EX_CONFIG,
-			// which the template unit's RestartPreventExitStatus knows.
+			// EX_CONFIG prevents systemd from retrying a configuration error.
 			log.Printf("alpacahurd: %v", err)
 			os.Exit(78)
 		}
@@ -94,10 +77,7 @@ func Main() {
 
 	if *check {
 		fmt.Printf("checking %s\n", resolvedCfg)
-		// Exit non-zero only for what stops the server itself: serve skips an
-		// entry with an error and serves the rest, so a supervisor's pre-start
-		// check must not keep the whole herd down for one bad device file.
-		// (An unloadable config already exited above, before the table.)
+		// Per-device errors do not prevent the remaining devices from starting.
 		if fatal, _ := checkConfig(os.Stdout, cfg); fatal > 0 {
 			os.Exit(1)
 		}
@@ -107,28 +87,20 @@ func Main() {
 	serve(cfg, resolvedCfg)
 }
 
-// serve runs the whole herd until SIGINT/SIGTERM: one Alpaca server per enabled
-// device and the shared discovery responder.
+// serve runs device servers, supervision, and discovery until SIGINT or SIGTERM.
 func serve(cfg *Config, cfgPath string) {
 	log.Printf("alpacahurd: config %s", cfgPath)
 
 	var logger *log.Logger
 	if cfg.Debug {
-		// One line per Alpaca request (client addr, method, URI, status, duration).
 		logger = log.New(os.Stderr, "alpaca ", log.LstdFlags|log.Lmsgprefix)
 	}
 
-	// Resolve "listen" into concrete bind addresses and the interfaces they live on.
-	// Empty means bind every interface.
 	listenAddrs, listenIfaces, err := resolveListen(cfg.Listen)
 	if err != nil {
 		log.Fatalf("alpacahurd: %v", err)
 	}
 
-	// One Alpaca server per distinct port, shared by every entry naming it, with
-	// device numbers handed out per port (deviceNumbers). A port to itself is the
-	// common case and still yields device 0. The maps live on the orchestrator,
-	// which adds to them when a device is enabled from the page.
 	orch := &orchestrator{cfgPath: cfgPath, cfg: cfg, sup: platformSupervisor(cfgPath), servers: map[int]*alpacadev.Server{}, startedAt: time.Now(),
 		listenAddrs: listenAddrs, logger: logger, byPort: map[int]*alpacadev.Server{}, nums: map[int]*deviceNumbers{}}
 	var servers []*alpacadev.Server
@@ -139,18 +111,12 @@ func serve(cfg *Config, cfgPath string) {
 	var separate []DeviceSpec // entries the supervisor runs
 	for _, spec := range cfg.Devices {
 		if !spec.enabled() {
-			// Listed on the orchestrator page with its file and driver, so a
-			// device added disabled (the page's add form writes them so) is
-			// visible before it is enabled; nothing is built for it.
 			log.Printf("alpacahurd: skipping %s (disabled)", spec.Driver)
 			orch.rows = append(orch.rows, orchRow{spec: spec, res: resolveDriver(spec), port: spec.Port})
 			continue
 		}
 		if spec.Port == 0 && spec.Instance == "" {
-			// An inline entry names its port. A devices.d entry may leave it
-			// unset, in which case its server scans from portScanBase and the
-			// bound port is persisted to the entry's state file (see
-			// persistBoundPorts), so it is stable from the next start.
+			// Only device-file entries can persist an automatically assigned port.
 			log.Printf("alpacahurd: device %q: \"port\" is required for an inline entry; skipping it", spec.Driver)
 			orch.rows = append(orch.rows, orchRow{spec: spec, res: resolveDriver(spec), skipped: `"port" is required for an inline entry`})
 			continue
@@ -159,10 +125,6 @@ func serve(cfg *Config, cfgPath string) {
 		switch res.kind {
 		case compiledIn:
 		case installedBinary:
-			// The driver is a separate binary: the platform supervisor runs it
-			// as `alpacahurd -launch <instance>`. Without a supervisor (a
-			// hand run, or a platform with none) it is reported and skipped,
-			// so a mixed deployment still starts its compiled-in devices.
 			if _, none := orch.sup.(noSupervisor); none {
 				log.Printf("alpacahurd: %s: driver %q resolves to %s; no platform supervisor here, so the entry is skipped (run it by hand: alpacahurd -launch %s)", spec.Source, spec.Driver, res.exe, spec.Instance)
 				orch.rows = append(orch.rows, orchRow{spec: spec, res: res, port: spec.Port, skipped: "separate binary; no supervisor on this host"})
@@ -172,35 +134,24 @@ func serve(cfg *Config, cfgPath string) {
 			separate = append(separate, spec)
 			continue
 		default:
-			// An entry whose driver is neither compiled in nor installed. A
-			// removed driver package leaves its devices.d fragment behind
-			// (dpkg keeps a conffile on remove), and a typo in an inline
-			// entry is the same shape; either is reported and skipped rather
-			// than fatal, so the rest of the herd serves.
 			log.Printf("alpacahurd: %s: driver %q is not compiled in and no binary was found; skipping the entry", spec.Source, spec.Driver)
 			orch.rows = append(orch.rows, orchRow{spec: spec, res: res, skipped: "driver not compiled in and no binary found"})
 			continue
 		}
-		// A multi-device entry (a driver with a MultiKey, e.g. astrocam's
-		// "cameras") expands to one spec per block; a flat entry is itself.
 		subs, serr := subSpecs(spec)
 		if serr != nil {
 			log.Printf("alpacahurd: %s: device %q: %v; skipping the entry", spec.Source, spec.Driver, serr)
 			orch.rows = append(orch.rows, orchRow{spec: spec, res: res, port: spec.Port, skipped: serr.Error()})
 			continue
 		}
-		// Entries naming a port share a server per port; an entry with no port
-		// gets its own server that scans, keyed by instance so it never shares.
+		// Negative keys give scanning instances separate servers.
 		key := spec.Port
 		if key == 0 {
 			key = -1 - len(scanned) // distinct negative keys, one per scanning entry
 		}
 		srv, shared := byPort[key]
 		if !shared {
-			// Each scanning server gets its own window above portScanBase, so
-			// five entries scanning at once cannot race for the same port: the
-			// bind-as-probe guarantee holds within one server, not across
-			// several started together against one base.
+			// Separate scan windows avoid concurrent port selection races.
 			srv = orch.newServer(spec.Port, len(scanned))
 			byPort[key] = srv
 			nums[key] = &deviceNumbers{}
@@ -212,23 +163,17 @@ func serve(cfg *Config, cfgPath string) {
 		}
 		for _, sub := range subs {
 			if !sub.enabled() {
-				// A disabled block: no device at its number, no row; the
-				// file's own switch covers the whole entry.
 				log.Printf("alpacahurd: skipping %s device %d (disabled)", spec.Instance, *sub.Block)
 				continue
 			}
 			dev, num, err := registerDevice(srv, sub, nums[key])
 			if err != nil {
-				// A device that cannot be built (a missing key, a bad value) is
-				// reported and skipped, not fatal: the rest of the herd serves,
-				// and the page shows the error beside a disable switch.
 				log.Printf("alpacahurd: %s: device %q: %v; skipping the entry", sub.Source, sub.Driver, err)
 				orch.rows = append(orch.rows, orchRow{spec: sub, res: res, port: sub.Port, skipped: err.Error()})
 				continue
 			}
 			b := built{spec: sub, dev: dev, num: num}
 			orch.rows = append(orch.rows, orchRow{spec: sub, res: res, num: num, inProcess: true, deviceName: dev.Name(), devType: deviceTypeOf(sub, dev), srvKey: key})
-			// Reload in place, from the setup page or the orchestrator page.
 			if err := srv.SetReloader(deviceTypeOf(sub, dev), num, reloaderFor(sub)); err != nil {
 				log.Fatalf("alpacahurd: device %q: %v", sub.Driver, err)
 			}
@@ -241,9 +186,6 @@ func serve(cfg *Config, cfgPath string) {
 	defer stop()
 	orch.ctx = ctx
 
-	// Separate binaries: install each with the supervisor and start it. The
-	// device is a peer under the supervisor, so a failure here is logged and
-	// the page shows it; the in-process devices are unaffected.
 	for _, spec := range separate {
 		sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		if err := orch.sup.Install(sctx, spec.Instance); err != nil {
@@ -257,25 +199,12 @@ func serve(cfg *Config, cfgPath string) {
 	}
 
 	if len(servers) == 0 && len(separate) == 0 {
-		// Not fatal: a freshly-installed box has a config with every device
-		// disabled. Stay up (so systemd shows the service healthy) with the
-		// orchestrator page serving, since that page is where a device gets
-		// enabled; the message says so.
 		log.Printf("alpacahurd: no enabled devices; enable one on the orchestrator page (below) or in %s", devicesDirFor(cfgPath))
 	}
 
-	// A server hosting one device is that device to a client: it takes the
-	// device's name and its driver's module version as its identity, so the
-	// port's setup page and /management/v1/description say "10Micron GM"
-	// rather than "alpacahurd". A shared port stays alpacahurd's.
 	nameServers(orch)
 
-	// Start the servers, so every port is known before discovery. Servers on
-	// a set port go first and bind before any scanner starts, so a scanner
-	// whose window covers a set port finds it taken and moves on rather than
-	// racing the pinned server for it. A server that cannot bind (its port
-	// held by another process) is dropped with its devices reported on the
-	// page, not fatal: the rest of the herd serves.
+	// Bind fixed ports before scanning so scanners cannot claim them.
 	errc := make(chan error, len(servers))
 	var ports []int
 	failed := map[*alpacadev.Server]error{}
@@ -345,10 +274,7 @@ func serve(cfg *Config, cfgPath string) {
 	orch.mu.Unlock()
 	persistBoundPorts(bound)
 
-	// The orchestrator page on its own port, so it has one address whatever the
-	// layout and needs no device port to exist. It is a bare server with no
-	// devices, only the page; / and /setup land on it. If the preferred port is
-	// taken, a scan from the next port up finds a free one and the log says where.
+	// Keep the setup page available even when no devices are running.
 	if sp := cfg.setupPort(); sp != 0 {
 		pageCfg := func(port, scanBase int) alpacadev.Config {
 			return alpacadev.Config{
@@ -379,9 +305,6 @@ func serve(cfg *Config, cfgPath string) {
 	}
 
 	if !strings.EqualFold(cfg.Discovery, "off") {
-		// The responder answers for the in-process ports and for every device
-		// that registers with it: a separate binary on this host directly, one
-		// on another host through the relay endpoint.
 		resp := newResponder(ports, orch.noteRegistration)
 		if err := runDiscovery(ctx, resp, cfg.ipv6Enabled(), listenIfaces); err != nil {
 			log.Fatalf("alpacahurd: discovery: %v", err)
@@ -392,8 +315,6 @@ func serve(cfg *Config, cfgPath string) {
 		log.Printf("alpacahurd: discovery responder on :%d for %d port(s), plus registrations", discoveryPort, len(ports))
 	}
 
-	// SIGHUP reloads every in-process device that can be: configuration
-	// re-read, hardware closed and reopened, ports kept.
 	onReloadSignal(ctx, func() {
 		log.Printf("alpacahurd: reload requested")
 		for _, s := range servers {
@@ -403,10 +324,6 @@ func serve(cfg *Config, cfgPath string) {
 		}
 	})
 
-	// Driver front-ends (a mount's LX200 bridge): the driver wires its own
-	// from the device's entry, the same call devicemain makes in a separate
-	// binary. A row whose server failed to bind serves no Alpaca and gets no
-	// front-end. Each row keeps its stop function for the disable path.
 	orch.mu.Lock()
 	for i := range orch.rows {
 		row := &orch.rows[i]
@@ -431,8 +348,7 @@ func serve(cfg *Config, cfgPath string) {
 	log.Printf("alpacahurd: shut down")
 }
 
-// nameServers gives each server hosting exactly one in-process device that
-// device's name and driver version as its identity; see serve.
+// nameServers uses the device identity for servers hosting exactly one device.
 func nameServers(orch *orchestrator) {
 	count := map[int]int{}
 	for _, row := range orch.rows {
@@ -450,9 +366,7 @@ func nameServers(orch *orchestrator) {
 	}
 }
 
-// driverVersion is the module version of a compiled-in driver, from the
-// binary's build info, falling back to the hurd's own version when the build
-// info does not name it (a workspace build reports "(devel)").
+// driverVersion returns the driver module version, falling back to the hurd version.
 func driverVersion(driver string) string {
 	if drv, ok := registry.Lookup(driver); ok {
 		if v := drv.ModuleVersion(); v != "" {

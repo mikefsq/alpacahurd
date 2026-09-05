@@ -26,9 +26,6 @@ func init() {
 	})
 }
 
-// subSpecs: blocks expand in order with their positions as device numbers and
-// their own name and enable; a flat entry stays itself; a bare MultiKey entry
-// defaults to two blocks.
 func TestSubSpecs(t *testing.T) {
 	subs, err := subSpecs(parseSpec(t, `{"driver":"multi-widget","port":11200,"units":[{"name":"a"},{"enable":false},{}]}`))
 	if err != nil {
@@ -66,8 +63,6 @@ func TestSubSpecs(t *testing.T) {
 	}
 }
 
-// checkConfig reports a multi-device entry one line per block, with disabled
-// blocks holding their device numbers as holes.
 func TestCheckConfigMultiDeviceEntry(t *testing.T) {
 	cfg := &Config{Devices: []DeviceSpec{
 		parseSpec(t, `{"driver":"multi-widget","port":11200,"units":[{"name":"first"},{"enable":false},{"name":"third"}]}`),

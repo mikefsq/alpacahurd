@@ -13,12 +13,7 @@ import (
 // scmServicePrefix names a device's Windows service: alpacahurd-<instance>.
 const scmServicePrefix = "alpacahurd-"
 
-// scmSupervisor drives the Windows Service Control Manager over sc.exe. The
-// SCM has no templates, so Install registers one service per instance running
-// `alpacahurd -launch <instance>`; on Windows that alpacahurd stays as the
-// service host (a service has to answer the SCM) and runs the driver binary as
-// its child, writing the child's output to logDir/<instance>.log, which Logs
-// reads. Service recovery options supply the restart on failure.
+// scmSupervisor controls per-instance Windows services through sc.exe.
 type scmSupervisor struct {
 	run     runner
 	self    string
@@ -47,9 +42,8 @@ func (s *scmSupervisor) binPath(instance string) string {
 	return strings.Join(q, " ")
 }
 
-// Install creates the service (start at boot, restart on failure) or, when it
-// exists, reconfigures its command line so a moved binary or config is picked
-// up. It does not start the service.
+// Install creates or updates a service with restart-on-failure settings.
+// It does not start the service.
 func (s *scmSupervisor) Install(ctx context.Context, instance string) error {
 	name := s.service(instance)
 	if _, err := s.run(ctx, "sc.exe", "qc", name); err == nil {
@@ -64,8 +58,6 @@ func (s *scmSupervisor) Install(ctx context.Context, instance string) error {
 		"ASCOM Alpaca device "+instance+" run by alpacahurd"); err != nil {
 		return err
 	}
-	// Restart 5 s after each of the first three failures, then keep restarting;
-	// the failure count resets after a minute up.
 	_, err := s.run(ctx, "sc.exe", "failure", name, "reset=", "60",
 		"actions=", "restart/5000/restart/5000/restart/5000")
 	return err
@@ -93,8 +85,7 @@ func (s *scmSupervisor) Stop(ctx context.Context, instance string) error {
 	if err != nil {
 		return err
 	}
-	// sc stop returns at once; wait for the stop to land so a Restart's start
-	// does not race it.
+	// Wait for asynchronous Stop to finish before Restart calls Start.
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		st, err := s.Status(ctx, instance)
@@ -113,8 +104,7 @@ func (s *scmSupervisor) Restart(ctx context.Context, instance string) error {
 	return s.Start(ctx, instance)
 }
 
-// Enable and Disable set the start type: auto at boot, or demand (started by
-// the orchestrator or by hand only).
+// Enable and Disable select automatic or on-demand startup.
 func (s *scmSupervisor) Enable(ctx context.Context, instance string) error {
 	_, err := s.run(ctx, "sc.exe", "config", s.service(instance), "start=", "auto")
 	return err

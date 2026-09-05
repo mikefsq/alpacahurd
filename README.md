@@ -1,198 +1,168 @@
 # alpacahurd
 
-A herd of [ASCOM Alpaca](https://ascom-standards.org/) astronomy
-device drivers intended to run on a Raspberry Pi. This is a
-platform supervisor that runs independent goalpaca driver binaries. It also
-supports linking the supervisor and driver modules together into one static
-binary.
+Run [ASCOM Alpaca](https://ascom-standards.org/) astronomy devices on Linux,
+macOS, or Windows, including Raspberry Pi. alpacahurd manages driver processes
+and provides a shared discovery service and browser setup page. Drivers can
+also be compiled into a single binary.
 
-## Platforms
+## Install on Debian or Raspberry Pi OS
 
-This works on any platform that can compile Go.
+See the [apt archive](https://mikefsq.github.io/apt/) for installation instructions,
+or download packages from [GitHub releases](https://github.com/mikefsq/alpacahurd/releases).
 
-| Platform | Transport | Build |
-|---|---|---|
-| Linux | usbfs / hidraw / serial | `go build`, no C toolchain  |
-| macOS | IOKit / IOUSBHost — **cgo** | `go build` with the Xcode command-line tools for cgo |
-| Windows | WinUSB / HID / serial | `go build`, no C toolchain |
+## Build from source
 
-
-
-## Install from a package (Debian, Ubuntu, Raspberry Pi OS)
-
-The packages are distributed in an apt archive. Install the archive's 
-signing key, add the source, then install:
+Requires Go 1.25 or later. Hardware drivers on macOS also need the Xcode
+command-line tools for cgo. Linux and Windows builds need no C toolchain.
 
 ```sh
-sudo curl -fsSLo /usr/share/keyrings/mikefsq-archive-keyring.gpg \
-  https://mikefsq.github.io/apt/mikefsq-archive-keyring.gpg
-
-sudo tee /etc/apt/sources.list.d/mikefsq.sources >/dev/null <<'EOF'
-Types: deb
-URIs: https://mikefsq.github.io/apt
-Suites: trixie
-Components: main
-Architectures: arm64
-Signed-By: /usr/share/keyrings/mikefsq-archive-keyring.gpg
-EOF
-
-sudo apt update && sudo apt install alpacahurd
-```
-
-Set `Suites` to the release you run (`bookworm` or `trixie`) and `Architectures`
-to what `dpkg --print-architecture` reports.
-
-Each GitHub release also attaches the `.deb` files themselves, for a machine
-that should not track the archive:
-
-```sh
-sudo apt install ./alpacahurd_1.2.3_arm64.deb
-```
-
-The package installs `/usr/bin/alpacahurd`, the systemd units, and the udev
-rules, then seeds `/etc/alpacahurd/hurd.json` and starts the service. It holds
-the bare orchestrator and the simulated devices and compiles in no hardware
-driver, so a fresh install serves an idle herd until a driver package is added
-beside it. Verify the install against the simulators first:
-
-```sh
-sudo cp /usr/share/doc/alpacahurd/examples/hurd.sim.json /etc/alpacahurd/hurd.json
-sudo systemctl restart alpacahurd
-```
-
-One package per architecture installs on every release. The binary is pure Go
-and links nothing shared, so it carries no dependency on a suite's glibc symbol
-versions and needs no separate build per Debian release.
-
-`sudo apt remove alpacahurd` stops the service and keeps the configuration;
-`sudo apt purge alpacahurd` also deletes `/etc/alpacahurd` and
-`/var/lib/alpacahurd`.
-
-Build the packages yourself with `make deb`, which writes them to `./dist` and
-takes about eight seconds. The build needs a Go toolchain, `dpkg-deb` and
-`file`, and it needs no root. `build/build-deb -h` lists its options: `-a`
-selects architectures (`armhf` builds too, for 32-bit Raspberry Pi OS), `-v`
-sets the version, `-o` the output directory.
-
-## Building from source
-
-The default `make build` builds the bare orchestrator `./alpacahurd`, which
-runs every device as a separate driver binary. The optional `make fat` regenerates
-`drivers_gen.go` from `hurd.conf` and compiles those drivers into the one
-binary.
-
-```sh
-#get the source
 git clone https://github.com/mikefsq/alpacahurd
 cd alpacahurd
 make build
-
-#optional, for a single binary 
-nano hurd.conf        # adjust the driver list, or add third-party drivers
-make fat              # builds with the hurd.conf drivers compiled in
-
-#install 
-sudo make install     # binary + systemd/launchd + config
-
-#restart 
-sudo systemctl restart alpacahurd # or 
-sudo launchctl kickstart -k system/com.mikefsq.alpacahurd
-
 ```
 
-## Install from Source on macOS/Linux
+`make build` includes simulators and runs hardware drivers as separate
+binaries. To bundle hardware drivers, edit the package list in `hurd.conf`
+and run `make fat`.
 
-Needs Go ≥ 1.25, which `go.mod` declares. Debian 13 Trixie ships Go 1.24, so
-a build there fetches the newer toolchain itself; a Mac can use `brew install
-go`. The official toolchain is at [go.dev/dl](https://go.dev/dl/).
+To run a bundled build without installing a service:
 
 ```sh
-git clone https://github.com/mikefsq/alpacahurd
-cd alpacahurd
-nano hurd.conf        # optional: trim the driver list, or add third-party drivers
-make workspace        # pre-release only: writes go.work over the sibling checkouts
-make fat              # builds ./alpacahurd with the hurd.conf drivers compiled in
-sudo make install     # binary + systemd service + udev rules + seeded config
-sudo nano /etc/alpacahurd/devices.d/astrocam.json   # enable YOUR devices (see below)
+make fat
+./alpacahurd -config config/hurd.sim.json
+```
+
+Use your own `hurd.json` to run hardware devices. Separate driver processes
+normally require access to the platform service manager; to launch one from
+a console, use `./alpacahurd -config <hurd.json> -launch <instance>`.
+
+To build Debian packages locally, run `make deb`. This needs `dpkg-deb` and
+`file` as well as Go, and writes packages to `dist/`. Run
+`build/build-deb -h` for architecture and version options.
+
+For driver development and integration, see [DRIVERS.md](DRIVERS.md).
+
+### Linux and macOS service
+
+After building:
+
+```sh
+sudo make install
+```
+
+The installer seeds `hurd.json` and one disabled file in `devices.d/` per
+compiled-in hardware driver, preserving existing files. Edit the device
+files for your hardware, then restart the service:
+
+```sh
+# Linux
 sudo systemctl restart alpacahurd
-journalctl -u alpacahurd -f            # watch it acquire your hardware
+journalctl -u alpacahurd -f
+
+# macOS
+sudo launchctl kickstart -k system/com.mikefsq.alpacahurd
 ```
 
-`make install` seeds the server config `hurd.json` with the server blocks and
-`devices.d/` with **one disabled file per compiled-in driver**. These directories
-are located in `/etc/alpacahurd/` on Linux and `/Library/Application Support/alpacahurd/` on
-macOS. Edit the files for the hardware you are using and restart the service. 
+`sudo make uninstall` removes the service and binary and keeps your configuration.
 
-The default `make build` target includes no hardware drivers. Each driver
-prints a config template with `<driver> -schema commented`. The `make
-install` target for each driver (in goalpaca-devices) installs the driver
-binary beside `alpacahurd` and writes a config file into `devices.d` if one
-does not already exist.
-## Install on Windows
+### Windows
 
-Needs Go ≥ 1.25 ([go.dev/dl](https://go.dev/dl/)); no C toolchain. `make.ps1`
-is the Windows counterpart of the Makefile (`.\make.ps1 help` lists the
-targets). From PowerShell in the repo directory:
+From PowerShell in the repository directory:
 
 ```powershell
-.\make.ps1 fat         # builds alpacahurd.exe with the hurd.conf drivers compiled in
-.\make.ps1 install     # elevated: install binary + config, startup task, firewall rule
+.\make.ps1 fat
+.\make.ps1 install
 ```
 
-`install` seeds `%ProgramData%\alpacahurd\hurd.json` with the server blocks
-and `devices.d\` with one disabled file per compiled-in driver, validates
-the config, registers a SYSTEM startup task that restarts on failure (the
-Windows analogue of the systemd service), and opens the firewall for the binary.
-Then edit the config and restart:
+Run `install` in an elevated shell. It installs the binary and configuration,
+creates a SYSTEM startup task, and adds a firewall rule. Edit files under
+`$env:ProgramData\alpacahurd\devices.d`, then restart the task:
 
 ```powershell
-notepad $env:ProgramData\alpacahurd\devices.d\astrocam.json
-Restart-ScheduledTask -TaskName alpacahurd
+Stop-ScheduledTask -TaskName alpacahurd
+Start-ScheduledTask -TaskName alpacahurd
 ```
 
-Run it as `powershell -ExecutionPolicy Bypass -File .\make.ps1 <target>` if
-execution policy blocks the script. Bind USB cameras to the generic WinUSB
-driver with [Zadig](https://zadig.akeo.ie/) first; vendor drivers are
-usually not WinUSB-compatible.
+Use `.\make.ps1 build` for an orchestrator that runs hardware drivers separately. If execution
+policy blocks the script, run it as
+`powershell -ExecutionPolicy Bypass -File .\make.ps1 <target>`.
+USB cameras using the WinUSB transport need a WinUSB-compatible driver binding.
 
 ## Configure devices
 
-Which devices run is declared in JSON. The server config `hurd.json` holds the
-shared blocks (`discovery`, `listen`), and a `devices.d`
-directory beside it holds one file per device. Pass `-config <path>`
-explicitly, or let it search (first found wins): `./hurd.json`, then the
-platform config directory (`~/.config/alpacahurd` for a user,
-`/etc/alpacahurd` under the service on Linux; see the table below).
-`$ALPACAHURD_CONFIG` overrides the search.
+`hurd.json` holds shared server settings. A `devices.d` directory beside it
+holds one JSON file per device instance:
 
-```
-/etc/alpacahurd/hurd.json                  server blocks
-/etc/alpacahurd/devices.d/mount.json       one device
-/etc/alpacahurd/devices.d/main-camera.json another
+```text
+/etc/alpacahurd/hurd.json
+/etc/alpacahurd/devices.d/mount.json
+/etc/alpacahurd/devices.d/main-camera.json
 ```
 
-A device file is one JSON object. The filename is the device's identity and
-names its state file:
+A minimal server configuration is:
+
+```json
+{
+  "discovery": "direct"
+}
+```
+
+Pass `-config <path>` to select it explicitly. Otherwise, alpacahurd uses
+`$ALPACAHURD_CONFIG`, or searches for `hurd.json` in the current directory,
+the platform configuration directory, then the system configuration directory.
+Interactive runs use per-user paths; services use the paths below.
+
+| Location | Linux | macOS | Windows |
+|---|---|---|---|
+| Configuration | `/etc/alpacahurd/` | `/Library/Application Support/alpacahurd/` | `%ProgramData%\alpacahurd\` |
+| Device state | `/var/lib/alpacahurd/devices/` | `/Library/Application Support/alpacahurd/state/devices/` | `%ProgramData%\alpacahurd\state\devices\` |
+| Logs | systemd journal | `/Library/Logs/alpacahurd/` | `%ProgramData%\alpacahurd\logs\` |
+
+`$ALPACA_CONFIG_DIR` and `$ALPACA_STATE_DIR` override configuration and state
+paths.
+
+### Device files
+
+The filename identifies the instance and its state file. For example,
+`mount.json` might contain:
 
 ```json
 {
   "driver": "tenmicron",
   "port": 11100,
+  "device": 0,
   "addr": "10.0.1.51:3492",
   "name": "Mount",
-  "lx200Port": 4030,
+  //"lx200Port": 4020,  //optional lx200 port
   "enable": true
 }
 ```
 
-The entry binds its hardware by `serial`, `addr`, or enumeration `index`,
-depending on the driver. `"enable": false` turns an entry off without
-deleting it. `"port"` names the entry's Alpaca port; an entry that omits it
-scans for a free one at first start, and the state file records the pick.
+Use `serial`, `addr`, or `index` to select hardware, as supported by the driver.
+Prefer a stable serial or address. Set `port` and `device` explicitly to keep
+the address stored by your Alpaca client stable. A device file without `port`
+gets an available port on first start and saves it in state.
 
-A multi-device driver serves several devices of its type from one file on one
-port. astrocam's `"cameras"` array holds one block per camera, numbered
-0, 1, … in order:
+Both `hurd.json` and device files accept JSONC (`//` and `/* */` comments),
+with no trailing commas. To see available settings, run
+`<driver> -schema commented` for an installed driver, or
+`alpacahurd -example <driver>` for a compiled-in driver.
+`alpacahurd -drivers` lists compiled-in drivers.
+
+Configuration-file values take precedence over saved state and appear locked
+in the device setup form. Settings left out of the file can be changed in the
+browser and are saved in the state directory. The `enable` switch is an
+exception: the browser's saved value takes precedence over the file, so it can
+enable an initially disabled device.
+
+Use `"exec": "/path/to/driver"` when a separate driver's executable has a
+different name or is outside alpacahurd's directory and `PATH`. A compiled-in
+driver takes precedence over an installed binary with the same name.
+
+### Multiple devices on one port
+
+Drivers with multi-device support can serve several devices from one file.
+For example, astrocam numbers cameras in array order, starting at zero:
 
 ```json
 {
@@ -206,133 +176,61 @@ port. astrocam's `"cameras"` array holds one block per camera, numbered
 }
 ```
 
-Note: separate ports per device are better for anything you restart or
-replug independently, so the other device is not reset. Shared ports exist
-for older client software that expects several devices at one address.
+Use separate files and ports when devices need independent process restarts.
+A shared port is useful for clients that expect several devices at one address.
 
-Note: pin `serial`, `port`, and `device`. These three fix a client's connect
-string: `serial` selects a unique device out of the enumeration, and the IP
-address, `port`, and `device` identify the device to the client. A change
-means updating the client configuration.
+## Manage devices
 
-### The setup page and the state directory
+Open `http://host:32227/setup` to view devices, edit configuration files,
+enable or disable instances, and reload devices. Separate driver processes
+also have service controls and logs. Each device has its own setup page at
+`http://host:<port>/setup`.
 
-alpacahurd serves an orchestrator page (`http://host:32227/setup`) on the
-same port number that answers Alpaca UDP discovery. The page shows every
-known device and lets you see status, edit configurations, and restart each
-device. Each device also has a browser configuration page
-(`http://host:<port>/setup`), generated from the driver's config struct.
+The shared setup page uses TCP port 32227 by default. If it is occupied,
+alpacahurd selects another port and logs the address. Set `setupPort` in
+`hurd.json` to choose a different starting port, or `-1` to disable the page.
 
-| role | Linux | macOS | Windows |
-|---|---|---|---|
-| config | `/etc/alpacahurd/` | `/Library/Application Support/alpacahurd/` | `%ProgramData%\alpacahurd\` |
-| state | `/var/lib/alpacahurd/devices/` | `…/alpacahurd/state/devices/` | `…\alpacahurd\state\devices\` |
-| logs | journal | `/Library/Logs/alpacahurd/` | `…\alpacahurd\logs\` |
+Use a device's Reload button after editing its file. Reload closes and reopens
+hardware. On Unix, `systemctl reload alpacahurd` or SIGHUP reloads compiled-in
+devices. Port, driver, and shared server setting changes require a restart.
 
-An interactive run uses the per-user equivalents. `$ALPACA_CONFIG_DIR` and
-`$ALPACA_STATE_DIR` override either.
+To check configuration without opening hardware:
 
-### Reload without a restart
+```sh
+alpacahurd -config /path/to/hurd.json -check
+```
 
-A device file edit takes effect on a reload. The Reload button rebuilds a
-device from its file, closing and reopening its hardware. A whole-herd
-reload is `systemctl reload alpacahurd` or `kill -HUP`. A port change
-requires a restart.
+Read the reported device errors as well as the exit status: per-device errors
+do not make `-check` exit nonzero or prevent other devices from starting.
 
+### Network and logging
 
-## LX200 (Stellarium, SkySafari)
+- `"listen": ["lo", "eth0"]` restricts in-process servers, discovery, and driver
+  front-ends to those interfaces. Interface names include IPv4 and IPv6; an
+  IPv4 literal binds only that address. Omit `listen` to bind all interfaces.
+- `"ipv6": false` disables IPv6 multicast discovery; IPv4 discovery still runs.
+- `"discovery": "off"` disables the shared discovery responder.
+- `"debug": true` adds per-request Alpaca logs. Lifecycle events are always logged.
 
-The mount drivers (tenmicron, rst, onstep, asiam5) serve a Meade-LX200 TCP
-bridge for clients like Stellarium. Enable it with `"lx200Port": 4020` in
-the device file; the bridge stops when the mount is disabled.
+### LX200 clients
 
-## Simulated devices
+The tenmicron, rst, onstep, and asiam5 mount drivers provide an LX200 TCP bridge
+for clients such as Stellarium and SkySafari. Set `"lx200Port": 4020` in the
+device file to enable it. Disabling the device stops the bridge.
 
-The `sim` module provides a full set of `sim-*` drivers. They are compiled
-into every flavor, the bare orchestrator included, so any install can serve
-a complete no-hardware herd for verifying itself and developing clients.
-[`config/hurd.sim.json`](config/hurd.sim.json) is the ready-made sim herd:
+### USB permissions on Linux
+
+USB and HID drivers need read-write access to their device nodes.
+[The supplied udev rules](deploy/99-alpacahurd.rules) cover ZWO, PlayerOne,
+Astroasis, and FTDI serial devices. The package and source installer install
+these rules; replug devices afterward. Additional hardware may need its own
+vendor rule.
+
+### Simulated devices
+
+Every build includes the `sim-*` drivers. Run the supplied configuration to
+try a complete set without hardware:
 
 ```sh
 ./alpacahurd -config config/hurd.sim.json
 ```
-
-## Restricting interfaces, IPv6, logging
-
-- `"listen": ["lo", "eth0"]` restricts every server (Alpaca, discovery, and
-  driver front-ends such as LX200) to those interfaces. An interface name 
-  serves both IP stacks; a bare IPv4 literal is IPv4-only. Omit to bind everything.
-- `"ipv6": false` turns off the IPv6 discovery responder (multicast group
-  `ff12::a1:9aca`); IPv4 broadcast is unaffected.
-- Everything logs to stderr → the journal. `"debug": true` adds per-request
-  Alpaca logging; lifecycle lines (listening, device acquired/lost with reason,
-  client connects) print regardless.
-
-## USB permissions (udev)
-
-USB/HID drivers need usbfs/hidraw access; the Go ASI camera driver reads
-the factory serial via a vendor control transfer (it's not a USB descriptor),
-so serial binding needs read-write access to the device node.
-`deploy/99-alpacahurd.rules` covers ZWO, PlayerOne, Astroasis, and
-FTDI-serial devices; `make install` installs it (then replug). Add other
-vendors' `idVendor` lines as you wire their drivers in.
-
-## Releasing
-
-A release takes two deliberate steps, and a push starts neither of them.
-
-Build and release the packages from this repository's Actions tab, or:
-
-```sh
-gh workflow run build-deb.yml --repo mikefsq/alpacahurd -f version=1.2.3
-```
-
-The run builds both architectures, installs the amd64 package on a runner and
-checks the service answers, then creates tag `v1.2.3` and a release carrying
-`alpacahurd_1.2.3_amd64.deb` and `alpacahurd_1.2.3_arm64.deb`. It refuses a
-version that already has a release. The archive serves these assets by name, so
-replacing one would change what an installed machine gets without the version
-changing with it.
-
-Then publish the archive, from the Actions tab of
-[mikefsq/apt](https://github.com/mikefsq/apt):
-
-```sh
-gh workflow run publish.yml --repo mikefsq/apt
-```
-
-That run reads this repository's latest release, downloads the assets named in
-its `sources.json`, rebuilds and signs every index, and republishes the site.
-Until it runs, a new release changes nothing for anyone who installed from the
-archive.
-
-Mark a release as a prerelease to keep it out of the archive while leaving the
-packages downloadable: the archive resolves `/releases/latest`, which skips
-them.
-
-A pull request runs the same build and install test and publishes nothing.
-
-## Running it yourself (no service)
-
-```sh
-make fat                          # the hardware drivers compiled in
-./alpacahurd -config hurd.json
-```
-
-The fat build is the simplest to run by hand. It serves everything in one process
-and needs no supervisor. The bare build serves the sims itself and hands the
-hardware entries to the platform supervisor, which a hand run usually lacks
-the rights to drive; `alpacahurd -launch <instance>` runs one such entry from
-a console instead.
-
-Linux and Windows binaries cross-compile from anywhere (pure Go):
-
-```sh
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags fat -o alpacahurd .    # 64-bit Pi
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags fat -o alpacahurd.exe .
-```
-
-macOS binaries must be built on a Mac (the IOKit transports need cgo).
-
-`sudo make uninstall` removes the service and binary on Linux (systemd + udev
-rules) and macOS (launchd); the config in `/etc/alpacahurd` is kept.

@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- launchd unit for alpacahurd (the macOS analogue of deploy/alpacahurd.service).
-     Installed by deploy/install-macos.sh to /Library/LaunchDaemons/. -->
+
 <plist version="1.0">
 <dict>
 	<key>Label</key>
@@ -14,9 +13,6 @@
 		<string>/Library/Application Support/alpacahurd/hurd.json</string>
 	</array>
 
-	<!-- launchd has no StateDirectory= analogue, so the platform paths are set
-	     explicitly (see CONFIG_PLAN.md): config and state under
-	     /Library/Application Support/alpacahurd, logs under /Library/Logs. -->
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>ALPACA_SYSTEM_SERVICE</key>
@@ -29,7 +25,6 @@
 		<string>/Library/Logs/alpacahurd</string>
 	</dict>
 
-	<!-- Start at boot; restart only after a failure (systemd Restart=on-failure). -->
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
@@ -40,7 +35,6 @@
 	<key>ThrottleInterval</key>
 	<integer>5</integer>
 
-	<!-- Everything logs to stderr; launchd lands it here. -->
 	<key>StandardOutPath</key>
 	<string>/Library/Logs/alpacahurd/alpacahurd.log</string>
 	<key>StandardErrorPath</key>

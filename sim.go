@@ -1,5 +1,4 @@
-// The sim drivers are always compiled in so any install can
-// serve as a no-hardware herd for verification and client development
+// Simulators are included in every build.
 package main
 
 import _ "github.com/mikefsq/goalpaca-devices/sim"

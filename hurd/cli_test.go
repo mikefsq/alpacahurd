@@ -11,10 +11,6 @@ import (
 	"github.com/mikefsq/goalpaca/registry"
 )
 
-// TestExampleConfigIsUsable is the guard on every compiled-in driver's
-// ConfigExample: -example (server blocks) plus -example-devices (one disabled
-// file per hardware driver) are the pair install.sh seeds, and they must load
-// and pass checkConfig with zero errors, every device disabled.
 func TestExampleConfigIsUsable(t *testing.T) {
 	t.Setenv("ALPACA_STATE_DIR", t.TempDir())
 	root := t.TempDir()
@@ -44,9 +40,6 @@ func TestExampleConfigIsUsable(t *testing.T) {
 		if d.enabled() {
 			t.Errorf("example entry %q is enabled; the seed config must start all-disabled", d.Driver)
 		}
-		// Every key but driver and enable is commented in a seed, port included,
-		// so a loaded seed has no port. -check skips a disabled entry before
-		// requiring one.
 		if d.Port != 0 {
 			t.Errorf("example entry %q has a live port %d; the seed should comment it", d.Driver, d.Port)
 		}
@@ -57,8 +50,6 @@ func TestExampleConfigIsUsable(t *testing.T) {
 			t.Errorf("example file for %q should be named after the driver, got instance %q", d.Driver, d.Instance)
 		}
 	}
-	// A seed is usable by uncommenting: enable it and its port line, and it
-	// checks ok.
 	seed := filepath.Join(root, "devices.d", "sim-focuser.json")
 	var sb strings.Builder
 	drv, _ := registry.Lookup("sim-focuser")
@@ -92,7 +83,6 @@ func TestExampleConfigIsUsable(t *testing.T) {
 	}
 }
 
-// TestSingleDriverExample: the per-driver form prints that driver's entry.
 func TestSingleDriverExample(t *testing.T) {
 	var buf bytes.Buffer
 	if err := printExample(&buf, "astrocam"); err != nil {
@@ -106,9 +96,6 @@ func TestSingleDriverExample(t *testing.T) {
 	}
 }
 
-// TestCheckConfigFindsProblems: each class of config mistake is reported as an
-// error, and none is fatal: serve skips an entry with an error and serves the
-// rest, so a supervisor's pre-start -check must not gate startup on them.
 func TestCheckConfigFindsProblems(t *testing.T) {
 	cfg := &Config{Devices: []DeviceSpec{
 		parseSpec(t, `{"driver":"sim-focuser","port":11200}`),         // ok
@@ -116,8 +103,7 @@ func TestCheckConfigFindsProblems(t *testing.T) {
 		parseSpec(t, `{"driver":"sim-focuser"}`),                      // missing port
 		parseSpec(t, `{"driver":"nope","port":11201}`),                // unknown driver
 		parseSpec(t, `{"driver":"asieaf","port":11202,"serail":"x"}`), // driver-key typo
-		// Sharing a port is legal (this is focuser/1 there), but pinning a number an
-		// earlier entry already took is not.
+		// A shared port is valid; a duplicate device number is not.
 		parseSpec(t, `{"driver":"sim-focuser","port":11200}`),
 		parseSpec(t, `{"driver":"sim-focuser","port":11200,"device":0}`),
 		parseSpec(t, `{"driver":"sim-focuser","port":11200,"device":-1}`),
@@ -146,9 +132,6 @@ func TestCheckConfigFindsProblems(t *testing.T) {
 	}
 }
 
-// TestCheckConfigFatalListen: a "listen" entry that resolves to nothing stops
-// serve before any device exists, the one condition -check exits non-zero
-// for with a loaded config.
 func TestCheckConfigFatalListen(t *testing.T) {
 	cfg := &Config{
 		Listen:  []string{"no-such-interface-0"},
@@ -164,9 +147,6 @@ func TestCheckConfigFatalListen(t *testing.T) {
 	}
 }
 
-// TestCheckConfigIgnoresFrontEndKeys: the keys of the removed INDI and LX200
-// front-ends ("indi", "lx200Port") stay common keys, so an old entry carrying
-// them checks clean: they never reach the driver's strict decode.
 func TestCheckConfigIgnoresFrontEndKeys(t *testing.T) {
 	cfg := &Config{Devices: []DeviceSpec{
 		parseSpec(t, `{"driver":"sim-focuser","port":11200,"indi":true,"lx200Port":4040}`),

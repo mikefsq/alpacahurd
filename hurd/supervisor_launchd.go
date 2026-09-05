@@ -16,12 +16,7 @@ import (
 // launchdLabelPrefix names a device's launchd job: com.mikefsq.alpacahurd.<instance>.
 const launchdLabelPrefix = "com.mikefsq.alpacahurd."
 
-// launchdSupervisor drives launchd over launchctl. launchd has no template
-// jobs, so Install writes one plist per instance under dir (the system
-// LaunchDaemons directory), running `alpacahurd -launch <instance>` with the
-// same environment the orchestrator's own plist sets. KeepAlive on failure
-// supplies the restart; the job's stdout and stderr go to logDir/<instance>.log,
-// which Logs reads.
+// launchdSupervisor controls per-instance launchd jobs through launchctl.
 type launchdSupervisor struct {
 	run     runner
 	self    string
@@ -44,9 +39,7 @@ func (l *launchdSupervisor) logPath(instance string) string {
 	return filepath.Join(l.logDir, instance+".log")
 }
 
-// plist renders the job. The environment names the config directory the
-// orchestrator's file lives in and the state directory the orchestrator itself
-// resolved, so the device finds the same files as the orchestrator does.
+// plist renders a job using the orchestrator config and state directories.
 func (l *launchdSupervisor) plist(instance string) string {
 	var args strings.Builder
 	for _, a := range launchCommand(l.self, l.cfgPath, instance) {
@@ -95,9 +88,7 @@ func (l *launchdSupervisor) plist(instance string) string {
 		html.EscapeString(l.logDir), html.EscapeString(l.logPath(instance)), html.EscapeString(l.logPath(instance)))
 }
 
-// Install writes the plist and loads it, without starting the job (bootstrap
-// with RunAtLoad starts it; a job already loaded is left alone). Idempotent:
-// an unchanged plist is not rewritten.
+// Install writes the job plist if its contents have changed.
 func (l *launchdSupervisor) Install(ctx context.Context, instance string) error {
 	want := l.plist(instance)
 	path := l.plistPath(instance)
@@ -136,9 +127,8 @@ func (l *launchdSupervisor) Start(ctx context.Context, instance string) error {
 	return err
 }
 
-// Stop unloads the job. KeepAlive would restart a killed process, so stopping
-// means removing the job from launchd until Start loads it again; the plist
-// stays, and the job comes back at boot if it is enabled.
+// Stop unloads the job to prevent KeepAlive from restarting it.
+// The plist remains available for Start or the next boot.
 func (l *launchdSupervisor) Stop(ctx context.Context, instance string) error {
 	if !l.loaded(ctx, instance) {
 		return nil
@@ -155,8 +145,7 @@ func (l *launchdSupervisor) Restart(ctx context.Context, instance string) error 
 	return err
 }
 
-// Enable and Disable use launchd's persistent per-label override, which
-// survives reboots and gates bootstrap at boot.
+// Enable and Disable set the persistent launchd boot override.
 func (l *launchdSupervisor) Enable(ctx context.Context, instance string) error {
 	_, err := l.run(ctx, "launchctl", "enable", "system/"+l.label(instance))
 	return err

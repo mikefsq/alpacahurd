@@ -9,9 +9,7 @@ import (
 	"testing"
 )
 
-// fakeRunner records every command line and answers from a table keyed by
-// the joined command; an unlisted command answers "" and nil, and a key whose
-// value starts with "ERR " answers that error.
+// fakeRunner returns canned output by command line; an ERR prefix returns an error.
 type fakeRunner struct {
 	calls   []string
 	answers map[string]string
@@ -39,8 +37,6 @@ func (f *fakeRunner) called(t *testing.T, want string) {
 	t.Errorf("command not run: %q\nran:\n  %s", want, strings.Join(f.calls, "\n  "))
 }
 
-// TestSystemdSupervisor: every action maps to the systemctl or journalctl
-// line the platform expects, and Status reads systemctl show.
 func TestSystemdSupervisor(t *testing.T) {
 	f := &fakeRunner{answers: map[string]string{
 		"systemctl cat alpacahurd-device@.service": "[Service]\nExecStart=/usr/local/bin/alpacahurd -launch %i -config /etc/alpacahurd/hurd.json\n",
@@ -90,10 +86,6 @@ func TestSystemdSupervisor(t *testing.T) {
 	}
 }
 
-// TestLaunchdSupervisor: Install writes a plist running alpacahurd -launch
-// with the platform environment, Start bootstraps or kickstarts, Stop boots
-// out, Enable and Disable use the persistent override, and Status reads
-// launchctl print and print-disabled.
 func TestLaunchdSupervisor(t *testing.T) {
 	t.Setenv("ALPACA_STATE_DIR", "/Library/Application Support/alpacahurd/state")
 	dir := t.TempDir()
@@ -190,8 +182,6 @@ func TestLaunchdSupervisor(t *testing.T) {
 	}
 }
 
-// TestSCMSupervisor: Install creates the service with recovery, the actions
-// map to sc.exe lines, and Status reads sc qc and sc query.
 func TestSCMSupervisor(t *testing.T) {
 	logDir := t.TempDir()
 	f := &fakeRunner{answers: map[string]string{
@@ -250,9 +240,6 @@ func TestSCMSupervisor(t *testing.T) {
 	f.called(t, "sc.exe delete alpacahurd-roof")
 }
 
-// TestLaunchArgv: -launch resolves a devices.d entry to its installed binary
-// in register mode, and refuses a compiled-in driver, an unresolved one, and
-// an unknown instance.
 func TestLaunchArgv(t *testing.T) {
 	root := t.TempDir()
 	cfgPath := filepath.Join(root, "hurd.json")

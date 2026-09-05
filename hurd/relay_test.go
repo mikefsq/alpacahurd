@@ -19,12 +19,6 @@ import (
 	alpacadev "github.com/mikefsq/goalpaca/server"
 )
 
-// TestResponderLocalAndRemote runs the herd responder on an ephemeral socket
-// with one in-process port, registers two Register-mode devices against it,
-// one on this host and one elsewhere, and probes it. The probe draws one reply
-// per local port (in-process and registered) and a relay request to the remote
-// device carrying the prober's address; the orchestrator page learns the local
-// binary's port from its heartbeat.
 func TestResponderLocalAndRemote(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -48,8 +42,7 @@ func TestResponderLocalAndRemote(t *testing.T) {
 
 	orch := &orchestrator{rows: []orchRow{{spec: DeviceSpec{Instance: "bench-focuser", deviceCommon: deviceCommon{Driver: "x"}}}}}
 	resp := newResponder([]int{11111}, orch.noteRegistration)
-	// The remote registration names a TEST-NET address; every relay request
-	// is steered to the httptest server so the test needs no such host.
+	// Route the TEST-NET address to the test server.
 	resp.reg.Client = &http.Client{Timeout: time.Second, Transport: &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, remote.Listener.Addr().String())
@@ -124,8 +117,6 @@ func TestResponderLocalAndRemote(t *testing.T) {
 		t.Fatalf("relay target %+v, want 127.0.0.1:%d", tgt, cport)
 	}
 
-	// The page joined the local heartbeat to its row by instance and holds
-	// the remote one as an unconfigured extra.
 	orch.mu.RLock()
 	defer orch.mu.RUnlock()
 	if orch.rows[0].reg == nil || orch.rows[0].reg.AlpacaPort != 11302 || !orch.rows[0].reg.Local {
@@ -139,8 +130,6 @@ func TestResponderLocalAndRemote(t *testing.T) {
 	}
 }
 
-// TestRegisteredStateExpires: a stale registration renders as nothing, so the
-// row falls back to the supervisor's view.
 func TestRegisteredStateExpires(t *testing.T) {
 	e := &alpacadev.Registration{Seen: time.Now().Add(-2 * alpacadev.DefaultRegistrationTTL), Local: true}
 	if s := registeredState(e); s != "" {
@@ -151,9 +140,6 @@ func TestRegisteredStateExpires(t *testing.T) {
 	}
 }
 
-// TestReloaderRereadsDeviceFile: the compiled-in reloader rebuilds a device
-// from its devices.d file as it is now, and refuses a driver change or a
-// disabled entry, which are restart matters.
 func TestReloaderRereadsDeviceFile(t *testing.T) {
 	stateRoot := t.TempDir()
 	t.Setenv("ALPACA_STATE_DIR", stateRoot)
@@ -198,10 +184,6 @@ func TestReloaderRereadsDeviceFile(t *testing.T) {
 	}
 }
 
-// TestEnableDisableInProcess: the page's enable on a disabled devices.d entry
-// writes the switch to the state file, constructs the device, starts a server
-// on its port, and serves it; disable closes it and removes it; the overlay
-// reads the state's enable over the admin file's on the next load.
 func TestEnableDisableInProcess(t *testing.T) {
 	stateRoot := t.TempDir()
 	t.Setenv("ALPACA_STATE_DIR", stateRoot)
@@ -280,8 +262,6 @@ func TestEnableDisableInProcess(t *testing.T) {
 		t.Fatalf("re-enable:\n%s", body)
 	}
 
-	// An entry whose build fails is not left recorded as enabled, and its row
-	// keeps the switch.
 	writeFile(t, filepath.Join(root, "devices.d", "mount.json"), `{"driver":"asiam5","port":11735,"enable":false}`)
 	mspec, err := loadDeviceFile(filepath.Join(root, "devices.d", "mount.json"), stateDevicesDir())
 	if err != nil {
@@ -305,9 +285,6 @@ func TestEnableDisableInProcess(t *testing.T) {
 	}
 }
 
-// TestEditDeviceFile: the page's editor shows a devices.d file, refuses text
-// that is not a device file, writes a valid one in place, and re-reads the
-// entry into its row so an enable that failed on the old file succeeds.
 func TestEditDeviceFile(t *testing.T) {
 	stateRoot := t.TempDir()
 	t.Setenv("ALPACA_STATE_DIR", stateRoot)

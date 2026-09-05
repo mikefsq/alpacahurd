@@ -10,12 +10,6 @@ import (
 	"golang.org/x/net/ipv6"
 )
 
-// TestDiscoveryIPv6RoundTrip sends a real Alpaca IPv6 multicast probe and asserts
-// the hurd responder replies with the advertised AlpacaPort. The probe is sent the
-// way a real Alpaca client sends it (with the egress multicast interface set
-// explicitly) on each multicast-capable interface, so this exercises the
-// responder's multi-interface JoinGroup path end to end. Skips only if the host has
-// no IPv6 multicast interface at all.
 func TestDiscoveryIPv6RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -41,10 +35,8 @@ func TestDiscoveryIPv6RoundTrip(t *testing.T) {
 	t.Fatalf("no IPv6 discovery reply on any of %d interface(s)", len(ifs))
 }
 
-// probeReply sends one Alpaca discovery probe to the multicast group out ifi and
-// reports whether a matching reply came back within a second. It sets the egress
-// multicast interface explicitly (as a real client does); a bare zoned DialUDP does
-// not reliably set IPV6_MULTICAST_IF on macOS.
+// probeReply sends a multicast probe through ifi and waits for a reply.
+// The explicit egress interface is required on macOS.
 func probeReply(t *testing.T, ifi *net.Interface, group, want []byte) bool {
 	t.Helper()
 	conn, err := net.ListenUDP("udp6", &net.UDPAddr{})
@@ -66,8 +58,7 @@ func probeReply(t *testing.T, ifi *net.Interface, group, want []byte) bool {
 	return err == nil && bytes.Contains(buf[:n], want)
 }
 
-// multicastInterfaces returns up, multicast-capable, non-loopback interfaces that
-// have an IPv6 address: the ones a client would probe over.
+// multicastInterfaces returns active non-loopback interfaces with IPv6 multicast support.
 func multicastInterfaces() []net.Interface {
 	var out []net.Interface
 	ifs, _ := net.Interfaces()

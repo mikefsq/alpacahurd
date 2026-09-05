@@ -28,8 +28,6 @@ func writeFile(t *testing.T, path, body string) {
 	}
 }
 
-// loadDevicesDir reads one entry per file in name order, with the filename stem
-// as the instance, and tolerates a missing directory.
 func TestLoadDevicesDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "devices.d")
 	writeFile(t, filepath.Join(dir, "b-guide.json"), `{"driver":"astrocam","port":11201,"serial":"bbbb"}`)
@@ -71,8 +69,6 @@ func inst(s []DeviceSpec, i int) string {
 	return "<none>"
 }
 
-// The state file fills keys the admin file left unset and never overrides one
-// it named. Pinned keys are the admin's driver-owned keys.
 func TestOverlayPrecedence(t *testing.T) {
 	root := t.TempDir()
 	admin := filepath.Join(root, "etc", "devices.d")
@@ -110,8 +106,6 @@ func TestOverlayPrecedence(t *testing.T) {
 	}
 }
 
-// LoadConfig merges the inline devices array with devices.d beside the file,
-// inline entries first.
 func TestLoadConfigMergesInlineAndDevicesDir(t *testing.T) {
 	t.Setenv("ALPACA_STATE_DIR", t.TempDir())
 	root := t.TempDir()
@@ -138,9 +132,6 @@ func TestLoadConfigMergesInlineAndDevicesDir(t *testing.T) {
 	}
 }
 
-// A pinned key from the admin file renders locked with the file named, and a
-// submit that names it is dropped; a state-only key is editable and persists to
-// the state file.
 func TestDevicesDirPinnedKeysOnSetupPage(t *testing.T) {
 	stateRoot := t.TempDir()
 	t.Setenv("ALPACA_STATE_DIR", stateRoot)
@@ -183,8 +174,7 @@ func TestDevicesDirPinnedKeysOnSetupPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state file not written at %s: %v", stateFile, err)
 	}
-	// The generated form persists typed JSON, so the value is a number, and it
-	// decodes under the driver's typed Config at the next start.
+	// Persisted settings must retain their JSON types.
 	if !strings.Contains(string(sb), `"fpsPercent": 55`) {
 		t.Errorf("state file should hold a typed fpsPercent:\n%s", sb)
 	}
@@ -206,9 +196,7 @@ func TestDevicesDirPinnedKeysOnSetupPage(t *testing.T) {
 	}
 }
 
-// newHurdServer registers one loaded DeviceSpec the way serve does, with
-// persistence on, and returns the live base URL. Unlike serveSpec it keeps the
-// spec's Instance, Pinned, and Source, so it exercises the devices.d path.
+// newHurdServer serves a device with its configured state persistence.
 func newHurdServer(t *testing.T, spec DeviceSpec) string {
 	t.Helper()
 	srv := alpacadev.New(alpacadev.Config{
@@ -224,10 +212,6 @@ func newHurdServer(t *testing.T, spec DeviceSpec) string {
 	return ts.URL
 }
 
-// A devices.d fragment naming a driver that is not compiled in is a warning
-// from -check, not an error: serve skips it and keeps starting. The same
-// unknown driver in the inline array stays an error, since that file is the
-// admin's own and -check exists to catch it.
 func TestUnresolvableFragmentIsWarning(t *testing.T) {
 	t.Setenv("ALPACA_STATE_DIR", t.TempDir())
 	root := t.TempDir()
@@ -252,9 +236,6 @@ func TestUnresolvableFragmentIsWarning(t *testing.T) {
 	}
 }
 
-// A devices.d entry with no port scans from portScanBase; the bound port is
-// written to its state file once, read back over the entry at the next load,
-// and never overwritten by a later scan.
 func TestScannedPortPersists(t *testing.T) {
 	stateRoot := t.TempDir()
 	t.Setenv("ALPACA_STATE_DIR", stateRoot)
@@ -304,8 +285,6 @@ func TestScannedPortPersists(t *testing.T) {
 		t.Errorf("state should record port %d:\n%s", ports[0], sb)
 	}
 
-	// The next load sees the port through the overlay, so the entry no longer
-	// scans and the driver decodes it.
 	c2, err := LoadConfig(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -324,8 +303,6 @@ func TestScannedPortPersists(t *testing.T) {
 	if string(after) != string(before) {
 		t.Errorf("unchanged port rewrote the file:\nbefore %s\nafter  %s", before, after)
 	}
-	// State describes what is: when the device binds a different port (the admin
-	// pinned one), the stale recorded port is replaced, not left to mislead.
 	persistBoundPorts([]boundEntry{{spec: spec, port: 11999}})
 	sb2, _ := os.ReadFile(stateFile)
 	if !strings.Contains(string(sb2), `"port": 11999`) {
@@ -333,9 +310,6 @@ func TestScannedPortPersists(t *testing.T) {
 	}
 }
 
-// resolveDriver: compiled in wins; a binary is found by exec, beside the
-// orchestrator, or on PATH; else unresolved. An inline entry with an unknown
-// driver stays fatal to -check; a devices.d one warns.
 func TestResolveDriver(t *testing.T) {
 	// Compiled in.
 	if r := resolveDriver(parseSpec(t, `{"driver":"sim-focuser","port":1}`)); r.kind != compiledIn {
@@ -389,9 +363,6 @@ func TestResolveDriver(t *testing.T) {
 	}
 }
 
-// noSupervisor reports every instance as in-process and running, and refuses
-// every action with ErrNoSupervisor, so the orchestrator page has one contract
-// whatever the platform.
 func TestNoSupervisor(t *testing.T) {
 	var s Supervisor = noSupervisor{}
 	ctx := context.Background()
@@ -421,9 +392,6 @@ func TestNoSupervisor(t *testing.T) {
 	}
 }
 
-// The orchestrator page renders every configured device, in process or not,
-// runs the config check on demand, refuses supervisor actions politely under
-// the no-op supervisor, and adds a device by writing a commented file.
 func TestOrchestratorPage(t *testing.T) {
 	t.Setenv("ALPACA_STATE_DIR", t.TempDir())
 	root := t.TempDir()
@@ -445,7 +413,6 @@ func TestOrchestratorPage(t *testing.T) {
 	for _, spec := range cfg.Devices {
 		res := resolveDriver(spec)
 		if !spec.enabled() {
-			// As serve does: a disabled file is listed, nothing is built.
 			orch.rows = append(orch.rows, orchRow{spec: spec, res: res, port: spec.Port})
 			continue
 		}
@@ -528,9 +495,6 @@ func TestOrchestratorPage(t *testing.T) {
 	}
 }
 
-// Several devices.d entries with no port scan at once, each in its own window
-// above portScanBase, so none collides with another and each ends up on a
-// distinct port that persists.
 func TestManyScannedPortsDoNotCollide(t *testing.T) {
 	stateRoot := t.TempDir()
 	t.Setenv("ALPACA_STATE_DIR", stateRoot)
@@ -585,9 +549,6 @@ func TestManyScannedPortsDoNotCollide(t *testing.T) {
 	}
 }
 
-// Pinning port in the admin file after a scan: the device binds the pinned
-// port and the state file is brought to match, so state never names a port the
-// device is not on.
 func TestPinnedPortReplacesStaleState(t *testing.T) {
 	stateRoot := t.TempDir()
 	t.Setenv("ALPACA_STATE_DIR", stateRoot)
@@ -622,9 +583,6 @@ func TestPinnedPortReplacesStaleState(t *testing.T) {
 	}
 }
 
-// A device server mounts /setup/hurd as a redirect to the orchestrator page
-// on the setup port, using the host the browser addressed; with the page off
-// it says so.
 func TestDeviceServerRedirectsToOrchestratorPage(t *testing.T) {
 	orch := &orchestrator{sup: noSupervisor{}, servers: map[int]*alpacadev.Server{}}
 	srv := alpacadev.New(alpacadev.Config{Discovery: alpacadev.DiscoveryConfig{Mode: alpacadev.DiscoveryOff}, ServerName: serverName, SetupPages: orch.redirectPages()})

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # uninstall.sh — stop and remove the alpacahurd service, binary, and udev rules.
-# The config in /etc/alpacahurd is kept (delete it yourself if you mean it).
+# The config in /etc/alpacahurd is kept.
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then

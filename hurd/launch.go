@@ -6,11 +6,7 @@ import (
 	"strings"
 )
 
-// launchArgv resolves the command line for one device entry running as a
-// separate binary: the entry named instance in cfg, its driver resolved to an
-// installed binary, launched in register discovery mode with its device file.
-// `alpacahurd -launch <instance>` runs this, and every platform supervisor's
-// record points at it, so the record never names a driver binary.
+// launchArgv resolves an instance to a driver binary in register discovery mode.
 func launchArgv(cfg *Config, cfgPath, instance string) (exe string, args []string, err error) {
 	for _, spec := range cfg.Devices {
 		if spec.Instance != instance {
@@ -28,10 +24,7 @@ func launchArgv(cfg *Config, cfgPath, instance string) (exe string, args []strin
 	return "", nil, fmt.Errorf("no device %q in %s (the instance is a devices.d file's stem)", instance, devicesDirFor(cfgPath))
 }
 
-// launch runs one device as a separate process for a supervisor: it resolves
-// the entry and, on Unix, replaces this process with the driver binary so the
-// supervisor's main PID is the driver's; on Windows it stays as the service
-// host and runs the driver as its child (see launch_windows.go).
+// launch runs an instance through the platform driver launcher.
 func launch(cfgPath string, cfg *Config, instance string) error {
 	exe, args, err := launchArgv(cfg, cfgPath, instance)
 	if err != nil {

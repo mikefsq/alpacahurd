@@ -1,5 +1,4 @@
-// Command alpacahurd runs a herd of ASCOM Alpaca device drivers
-// on a Raspberry Pi (or any Linux/macOS box)
+// Command alpacahurd runs ASCOM Alpaca device drivers.
 package main
 
 import "github.com/mikefsq/alpacahurd/hurd"

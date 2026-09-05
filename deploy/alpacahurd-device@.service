@@ -1,35 +1,19 @@
-# Template unit for one device running as a separate binary under alpacahurd:
-# instantiated per device file as alpacahurd-device@<instance>.service, where
-# <instance> is the file's stem in /etc/alpacahurd/devices.d/. alpacahurd
-# installs and controls the instances from its orchestrator page; this file
-# needs no per-instance edit.
-#
-# The command is alpacahurd -launch: it reads the entry, resolves its driver
-# to the installed binary (the entry's "exec", a binary named for the driver
-# beside alpacahurd, or one on PATH), and replaces itself with that binary in
-# register discovery mode, so the orchestrator answers discovery for it.
+# Device instance names are filename stems from /etc/alpacahurd/devices.d.
 [Unit]
 Description=alpacahurd device %i
 Documentation=https://github.com/mikefsq/alpacahurd
-# Stop and restart with the orchestrator; start after it so registration
-# lands. The device stays up if the orchestrator alone crashes.
 PartOf=alpacahurd.service
 After=alpacahurd.service network-online.target
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/alpacahurd -launch %i -config /etc/alpacahurd/hurd.json
-# systemctl reload: the device re-reads its file and reopens its hardware.
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
-# alpacahurd -launch exits 78 (EX_CONFIG) when the entry cannot launch at all:
-# no such instance, its driver compiled into alpacahurd, or its binary gone.
-# Retrying cannot fix that, so the unit stays down instead of looping.
+# Exit 78 (EX_CONFIG) requires a configuration fix before retrying.
 RestartPreventExitStatus=78
 User=root
-# The same directories as the orchestrator: the device file under
-# /etc/alpacahurd, the state file the setup page writes under /var/lib.
 StateDirectory=alpacahurd
 ConfigurationDirectory=alpacahurd
 

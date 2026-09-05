@@ -22,19 +22,7 @@ import (
 	alpacadev "github.com/mikefsq/goalpaca/server"
 )
 
-// The orchestrator page, at /setup/hurd on every server the hurd runs, is the
-// one place that sees the whole herd: every configured device with how it runs
-// (in process or as a separate binary), whether it is up, its port and device
-// number, a link to its own setup page, and the actions the supervisor offers.
-// It also runs the equivalent of -check on demand and adds a device by writing
-// a commented device file from a driver's schema.
-//
-// Everything on it comes from the config files, the resolution, and the
-// Supervisor interface, so it renders the same in both layouts: with the
-// no-op supervisor every device is in process and the actions refuse politely.
-
-// orchestrator is the shared state behind the page: what serve built, plus the
-// supervisor and the config paths, read-locked by the page.
+// orchestrator holds the setup page state, protected by mu.
 type orchestrator struct {
 	cfgPath   string
 	cfg       *Config
@@ -44,16 +32,9 @@ type orchestrator struct {
 	servers   map[int]*alpacadev.Server // by bound port
 	startedAt time.Time
 	page      int // the port the orchestrator page bound; 0 until it does
-	// extra holds registrations that match no configured instance, by
-	// UniqueID (else address:port); see noteRegistration.
+	// extra holds unconfigured registrations by UniqueID or address:port.
 	extra map[string]*alpacadev.Registration
 
-	// What enabling a device at runtime needs from serve: the context the
-	// servers run under, the listen addresses and request logger for a new
-	// server, the servers by key with their device numbers, how many scanning
-	// servers exist (each gets its own port window), and the discovery
-	// responder to tell about a new port. Set by serve; nil in a test that
-	// renders only.
 	ctx         context.Context
 	listenAddrs []string
 	logger      *log.Logger
@@ -74,22 +55,15 @@ type orchRow struct {
 	deviceName string
 	devType    alpacadev.DeviceType
 	srvKey     int // key into serve's byPort map, to read the bound port back
-	// reg is the last heartbeat from a separate binary running this entry,
-	// matched by instance; nil until one arrives. It carries the bound port
-	// and the address the device is reachable at.
+	// reg is the latest heartbeat matching this instance, or nil.
 	reg *alpacadev.Registration
-	// reloadable is set for an in-process device the server can reload in
-	// place; a separate binary is asked over HTTP and decides for itself.
+	// reloadable indicates support for in-process reload.
 	reloadable bool
-	// stopFrontEnd ends the device's front-end (wireFrontEnd); nil when none
-	// was wired. The disable path calls it.
+	// stopFrontEnd cancels the optional driver front-end.
 	stopFrontEnd context.CancelFunc
 }
 
-// noteRegistration records a heartbeat against the row whose instance it
-// names. A registration naming no known instance is a device someone runs by
-// hand in register mode; it is listed too, so the page shows every device the
-// orchestrator answers discovery for.
+// noteRegistration updates the matching instance or records an extra device.
 func (o *orchestrator) noteRegistration(e *alpacadev.Registration) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -109,8 +83,7 @@ func (o *orchestrator) noteRegistration(e *alpacadev.Registration) {
 	o.extra[key] = e
 }
 
-// registeredState is the page's word for a heartbeat: where the device is and
-// how fresh the registration is; empty when the registration has expired.
+// registeredState describes a heartbeat, or returns empty for an expired registration.
 func registeredState(e *alpacadev.Registration) string {
 	if e == nil {
 		return ""
@@ -126,10 +99,7 @@ func registeredState(e *alpacadev.Registration) string {
 	return fmt.Sprintf("registered from %s, %s ago", where, age.Round(time.Second))
 }
 
-// reload reloads one device in place: an in-process device through its
-// server, a separate binary through the reload form on its own setup page,
-// reached at the address and port its registration carries. inst names a
-// configured entry; uniqueID names a registered device outside the config.
+// reload reloads a configured instance or an unconfigured registration by uniqueID.
 func (o *orchestrator) reload(ctx context.Context, inst, uniqueID string) error {
 	o.mu.RLock()
 	var row *orchRow
@@ -209,15 +179,12 @@ func deviceTypeOf(spec DeviceSpec, dev alpacadev.Device) alpacadev.DeviceType {
 	return ""
 }
 
-// setupPages returns the sub-pages the hurd mounts on its own setup-port
-// server beside the page itself at /setup: /setup/check and /setup/add.
+// setupPages returns the orchestrator setup, check, add, and edit pages.
 func (o *orchestrator) setupPages() map[string]http.Handler {
 	return map[string]http.Handler{"check": o, "add": o, "edit": o}
 }
 
-// redirectPages returns what a device server mounts: /setup/hurd redirects to
-// the orchestrator page on the setup port, using the host the browser addressed
-// so the link works from any machine.
+// redirectPages links device servers to the orchestrator using the requested host.
 func (o *orchestrator) redirectPages() map[string]http.Handler {
 	return map[string]http.Handler{"hurd": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if p := o.pagePort(); p != 0 {
@@ -293,9 +260,7 @@ func (o *orchestrator) handleAction(w http.ResponseWriter, r *http.Request) {
 		o.renderOutput(w, r, b.String())
 		return
 	case "start", "stop", "restart":
-		// Supervisor actions apply only to a separate binary: starting the
-		// unit of a compiled-in driver launches an `alpacahurd -launch` that
-		// can only fail.
+		// Compiled-in drivers cannot be launched through the supervisor.
 		if kind, known := o.resolutionKind(inst); known && kind != installedBinary {
 			err = fmt.Errorf("%s: its driver is %s, not a separate binary; the enable/disable switch runs it", inst, kind)
 			break
@@ -341,9 +306,7 @@ func (o *orchestrator) resolutionKind(inst string) (resolutionKind, bool) {
 	return unresolved, false
 }
 
-// handleAdd writes a new device file from a driver's commented schema. The
-// file is disabled and every key but driver is commented, so adding a device
-// changes nothing until the admin edits it; the page says where it went.
+// handleAdd writes a disabled device file from a compiled-in driver schema.
 func (o *orchestrator) handleAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		o.render(w, r, "could not read the form", "error")
@@ -378,8 +341,6 @@ func (o *orchestrator) handleAdd(w http.ResponseWriter, r *http.Request) {
 		o.render(w, r, fmt.Sprintf("write %s: %v", path, err), "error")
 		return
 	}
-	// The new entry joins the table at once, disabled, so it can be enabled
-	// from there without a restart.
 	if spec, err := loadDeviceFile(path, stateDevicesDir()); err == nil {
 		o.mu.Lock()
 		o.rows = append(o.rows, orchRow{spec: spec, res: resolveDriver(spec), port: spec.Port})
@@ -389,11 +350,7 @@ func (o *orchestrator) handleAdd(w http.ResponseWriter, r *http.Request) {
 	o.render(w, r, fmt.Sprintf("wrote %s: uncomment the keys it needs, then enable it in the table above", path), "ok")
 }
 
-// handleEdit serves the raw device file editor: GET shows the admin file of
-// the named devices.d entry; POST validates the text as a device file (JSON
-// with comments, naming a driver) and writes it in place, then re-reads the
-// entry into its row so the table and the next enable or reload see it. The
-// instance has to be one the table knows, which rules out any other path.
+// handleEdit displays or validates and saves a known instance configuration file.
 func (o *orchestrator) handleEdit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		o.render(w, r, "", "")
@@ -461,8 +418,7 @@ func (o *orchestrator) handleEdit(w http.ResponseWriter, r *http.Request) {
 	o.render(w, r, msg, "ok")
 }
 
-// writeFileAtomic writes b to path through a temp file and a rename, so a
-// crash mid-write leaves the old file.
+// writeFileAtomic replaces path through a temporary file and rename.
 func writeFileAtomic(path string, b []byte) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o644); err != nil {
@@ -476,14 +432,10 @@ type pageRow struct {
 	Instance, Driver, Type, Name, How, Port, State, Setup, Argv, Skipped string
 	Num                                                                  int
 	Enabled, Running, Actions                                            bool
-	// Reload offers the reload button: an in-process device with a reloader,
-	// or a running separate binary, which is asked over HTTP. UniqueID names
-	// a registered device that matches no configured instance.
+	// Reload controls the reload button. UniqueID identifies an unconfigured registration.
 	Reload   bool
 	UniqueID string
-	// Toggle offers enable or disable through the orchestrator (setEnabled)
-	// for a devices.d entry that is in process or could be: the supervisor
-	// form carries the same buttons for a separate binary.
+	// Toggle enables the in-process device switch.
 	Toggle bool
 	// Edit links the raw device file editor for a devices.d entry.
 	Edit bool
@@ -503,8 +455,7 @@ type pageView struct {
 	BannerKind string
 	CheckOut   string
 	CheckKind  string
-	// The device file editor, shown when EditInstance is set: the admin file
-	// of one devices.d entry, as text, with its path.
+	// EditInstance selects the device file editor.
 	EditInstance string
 	EditPath     string
 	EditText     string
@@ -538,10 +489,6 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 			}
 		}
 	}
-	// The CSS comes from whichever server is rendering, so the page matches.
-	// The CSS is goalpaca's default setup stylesheet, the same every device
-	// page here uses, so the page matches whether or not any device server
-	// exists yet.
 	view.CSS = template.CSS(alpacadev.DefaultSetupTemplates().CSS)
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -561,10 +508,6 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 		regState := registeredState(row.reg)
 		switch {
 		case !row.spec.enabled():
-			// A disabled entry: its file exists and its driver resolves (or
-			// not); nothing runs. The template says "disabled". A devices.d
-			// entry offers enable here; a separate binary through its
-			// supervisor form.
 			pr.How = row.res.kind.String()
 			if row.port != 0 {
 				pr.Port = fmt.Sprint(row.port)
@@ -572,8 +515,6 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 			pr.Toggle = row.spec.Instance != "" && row.res.kind == compiledIn
 			pr.Actions = row.spec.Instance != "" && row.res.kind == installedBinary
 		case regState != "":
-			// A separate binary is running and heartbeating; the registration
-			// says where and on which port, whatever the supervisor knows.
 			pr.How, pr.State, pr.Running = "separate binary", regState, true
 			pr.Port = fmt.Sprint(row.reg.AlpacaPort)
 			host := hostOf(r)
@@ -584,9 +525,6 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 			pr.Actions = row.skipped == ""
 			pr.Reload = true
 		case row.skipped != "":
-			// Enabled but not running: a driver that resolved nowhere, or a
-			// build that failed. The switch stays available so the entry can
-			// be turned off (or tried again once its file is fixed).
 			pr.How, pr.State = row.res.kind.String(), "skipped"
 			if row.port != 0 {
 				pr.Port = fmt.Sprint(row.port)
@@ -599,11 +537,6 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 			pr.Reload = row.reloadable
 			pr.Toggle = row.spec.Instance != ""
 		default:
-			// Enabled but not running here and not registered. Only a driver
-			// that resolves to a separate binary belongs to the supervisor. A
-			// compiled-in (or unresolved) driver lands here when an add or an
-			// edit turned its file on without starting it; it gets the page
-			// switch.
 			if row.res.kind != installedBinary {
 				pr.How, pr.State = row.res.kind.String(), "not running"
 				if row.port != 0 {
@@ -630,7 +563,6 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 		}
 		view.Rows = append(view.Rows, pr)
 	}
-	// Devices registered by hand, outside the config.
 	var extraKeys []string
 	for k := range o.extra {
 		extraKeys = append(extraKeys, k)
@@ -670,8 +602,7 @@ func (o *orchestrator) renderOutput(w http.ResponseWriter, r *http.Request, text
 	o.render(w, r, text, "output")
 }
 
-// hostOf returns the host the browser addressed, without its port, so links to
-// other ports on this machine use the same address the user reached us by.
+// hostOf returns the requested host without its port.
 func hostOf(r *http.Request) string {
 	h := r.Host
 	if u, err := url.Parse("http://" + h); err == nil && u.Hostname() != "" {

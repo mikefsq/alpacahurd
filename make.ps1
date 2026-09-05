@@ -1,23 +1,12 @@
 <#
 .SYNOPSIS
-    Build and install helper for alpacahurd on Windows — the Makefile equivalent.
+    Build and install helper for alpacahurd on Windows.
 
 .DESCRIPTION
-    Pass a target as the first argument (default "all"):
-      help        show this list
-      workspace   (re)write go.work over the sibling checkouts (pre-release only)
-      tidy        resolve every dependency from the module proxy (no siblings needed)
-      gen         regenerate drivers_gen.go from hurd.conf
-      build       the bare orchestrator: sim drivers only, hardware as separate binaries
-      fat         bundle the hurd.conf drivers into the binary (compiled-in layout)
-      all         build (default)
-      test        run the test suite
-      install     install the binary + config and register a startup task (admin)
-      uninstall   remove the task and firewall rule (admin; config is kept)
-      clean       remove the built binary
+    Pass a target as the first argument (default "all"). Use "help" to list targets.
 
 .EXAMPLE
-    .\make.ps1 tidy      # fresh clone, no sibling repos: resolve from the proxy
+    .\make.ps1 deps-head
     .\make.ps1
     .\make.ps1 install
 
@@ -38,16 +27,7 @@ $DevicesDir = Join-Path $InstallDir "devices.d"
 $StateDir   = Join-Path $InstallDir "state"
 $LogDir     = Join-Path $InstallDir "logs"
 
-# Library sibling checkouts the workspace overlays. The driver modules are added
-# recursively from ..\goalpaca-devices, so only the libraries are listed here.
-# Keep in sync with the Makefile's WS_DIRS.
-$Libs = @(
-    "..\goalpaca", "..\lx200", "..\goindi", "..\astrocam", "..\goasi",
-    "..\goasi\asiair", "..\ptp", "..\stellarmate",
-    "..\oasis-astro", "..\optec", "..\pegasus-astro", "..\astromi.ch", "..\unihedron"
-)
-
-# run a native command and fail the script on a non-zero exit (make-style).
+# Run a native command and fail on a nonzero exit.
 function Invoke-Native {
     param([string]$File, [string[]]$Arguments)
     & $File @Arguments
@@ -64,72 +44,62 @@ function Assert-Admin {
 
 function Target-Help {
     @"
-alpacahurd make.ps1 targets:
-  help        show this list
-  workspace   (re)write go.work over the sibling checkouts (pre-release only)
-  tidy        resolve every dependency from the module proxy (no siblings needed)
-  gen         regenerate drivers_gen.go from hurd.conf
-  build       the bare orchestrator: sim drivers only, hardware as separate binaries
-  fat         bundle the hurd.conf drivers into the binary (compiled-in layout)
-  all         build (default)
-  test        run the test suite
-  install     install binary + config and register a startup task (admin)
-  uninstall   remove the task and firewall rule (admin; config kept)
-  clean       remove the built binary
+Usage: .\make.ps1 <target>
 
-Two ways to resolve the dependencies on a fresh box:
-
-  .\make.ps1 tidy        no sibling checkouts; everything comes from the module
-                         proxy and is pinned in go.mod/go.sum. Run this once,
-                         then '.\make.ps1'. Committing the resulting go.mod and
-                         go.sum makes a plain clone build with no setup at all.
-
-  .\make.ps1 workspace   the sibling repos checked out next to this one, tracked
-                         at their local HEAD through a gitignored go.work.
+  all        Build the orchestrator with simulators (default)
+  build      Build alpacahurd.exe; hardware drivers run as separate binaries
+  clean      Remove the built binary and dist/
+  deps-head  Update mikefsq dependencies to their latest main commits
+  fat        Build alpacahurd.exe with the drivers listed in hurd.conf
+  gen        Regenerate driver imports from hurd.conf
+  help       Show available targets
+  install    Install binary, config, startup task, and firewall rule (admin)
+  test       Run the Go test suite
+  tidy       Regenerate imports, update dependencies to main, and tidy modules
+  uninstall  Remove task, firewall rule, and binary; keep config (admin)
 "@ | Write-Host
 }
 
-function Target-Workspace {
-    Remove-Item -Force -ErrorAction SilentlyContinue go.work, go.work.sum
-    Invoke-Native go @("work", "init", ".")
-    $devices = "..\goalpaca-devices"
-    if (Test-Path $devices) {
-        Invoke-Native go @("work", "use", "-r", $devices)   # every driver module under it
-    } else {
-        Write-Warning "missing (skipped): $devices - clone it next to alpacahurd"
+function Target-DepsHead {
+    $previousGoWork = $env:GOWORK
+    try {
+        $env:GOWORK = "off"
+        $self = & go list -m
+        if ($LASTEXITCODE -ne 0) { throw "go list -m exited $LASTEXITCODE" }
+        $modules = @(
+            [regex]::Matches((Get-Content -Raw go.mod), 'github.com/mikefsq/[a-zA-Z0-9./-]+') |
+                ForEach-Object { $_.Value } |
+                Where-Object { $_ -ne $self } |
+                Sort-Object -Unique
+        )
+        if ($modules.Count -eq 0) {
+            Write-Host "deps-head: no github.com/mikefsq dependencies in go.mod"
+            return
+        }
+        $modules | ForEach-Object { Write-Host "  $_" }
+        $getArgs = @("get") + @($modules | ForEach-Object { "${_}@main" })
+        Invoke-Native go $getArgs
+    } finally {
+        $env:GOWORK = $previousGoWork
     }
-    foreach ($d in $Libs) {
-        if (Test-Path $d) { Invoke-Native go @("work", "use", $d) }
-        else { Write-Warning "missing (skipped): $d - clone it next to alpacahurd" }
-    }
-    Write-Host "go.work written over the present siblings"
 }
 
 function Target-Gen  { Invoke-Native go @("run", ".\internal\gendrivers") }
 
 function Target-Tidy {
-    # Regenerate drivers_gen.go, then resolve every dependency from the module
-    # proxy into go.mod/go.sum; no sibling checkouts needed. (This used to pre-
-    # `go get` astromi.ch/unihedron/lx200 to work around stale published go.mods;
-    # goalpaca-devices was republished with correct requirements, so a plain tidy
-    # now resolves the whole graph.)
     Target-Gen
+    Target-DepsHead
     Invoke-Native go @("mod", "tidy")
-    Write-Host "go.mod/go.sum resolved from the module proxy"
+    Write-Host "updated dependencies and tidied go.mod/go.sum"
 }
 
 function Target-Build {
-    # The bare orchestrator: drivers_gen.go carries `//go:build fat`, so this
-    # build excludes it and every hardware entry resolves to an installed
-    # driver binary; the sims are in both flavors. The Windows transports are
-    # pure Go; no C toolchain required.
     $env:CGO_ENABLED = "0"
     Invoke-Native go @("build", "-o", $Bin, ".")
     Write-Host "built .\$Bin (bare: sim drivers only)"
 }
 
 function Target-Fat {
-    # The bundled build: the fat tag compiles the hurd.conf drivers in.
     $env:CGO_ENABLED = "0"
     Invoke-Native go @("build", "-tags", "fat", "-o", $Bin, ".")
     Write-Host "built .\$Bin (fat: hurd.conf drivers compiled in)"
@@ -139,7 +109,10 @@ function Target-All  { Target-Build }
 
 function Target-Test { Invoke-Native go @("test", "./...") }
 
-function Target-Clean { Remove-Item -Force -ErrorAction SilentlyContinue $Bin }
+function Target-Clean {
+    Remove-Item -Force -ErrorAction SilentlyContinue $Bin
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue dist
+}
 
 function Target-Install {
     Assert-Admin
@@ -152,27 +125,19 @@ function Target-Install {
     if (Test-Path $Config) {
         Write-Host "keeping existing config $Config"
     } else {
-        # Seed the server config: the server blocks and no inline devices.
-        # WriteAllText emits UTF-8 with no BOM, which the JSON loader needs.
         $example = (& $ExeDst -example | Out-String)
+        # The JSON loader requires UTF-8 without a BOM.
         [System.IO.File]::WriteAllText($Config, $example)
         Write-Host "installed server config -> $Config"
     }
-    # One disabled device file per compiled-in driver beside it; existing files
-    # are kept. Enable the ones you have, fill in serials/addresses, restart.
+    # Preserve existing device files.
     Invoke-Native $ExeDst @("-example-devices", $DevicesDir)
     Write-Host "device files -> $DevicesDir\   *** EDIT THESE for your hardware ***"
-    # State (what the setup pages write) and logs, per the platform table in
-    # CONFIG_PLAN.md: %ProgramData%\alpacahurd\state and \logs.
     New-Item -ItemType Directory -Force -Path (Join-Path $StateDir "devices"), $LogDir | Out-Null
 
-    # Validate the config before registering the task (the ExecStartPre equivalent).
     Invoke-Native $ExeDst @("-check", "-config", $Config)
 
-    # Startup task as SYSTEM, restart on failure, no run-time limit: the Windows
-    # analogue of the systemd service / launchd daemon.
-    # No root heuristic exists on Windows, so tell the program it is a service;
-    # the platform paths then resolve to %ProgramData%\alpacahurd by default.
+    # ALPACA_SYSTEM_SERVICE selects service paths for the startup task.
     [Environment]::SetEnvironmentVariable("ALPACA_SYSTEM_SERVICE", "true", "Machine")
     $action    = New-ScheduledTaskAction -Execute $ExeDst -Argument "-config `"$Config`""
     $trigger   = New-ScheduledTaskTrigger -AtStartup
@@ -184,8 +149,6 @@ function Target-Install {
         -Principal $principal -Settings $settings -Force | Out-Null
     Write-Host "registered startup task '$TaskName'"
 
-    # Allow the binary through the firewall (covers every Alpaca port + UDP 32227
-    # discovery), so a rule per port is unnecessary.
     if (-not (Get-NetFirewallRule -DisplayName $TaskName -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName $TaskName -Direction Inbound `
             -Program $ExeDst -Action Allow -Profile Any | Out-Null
@@ -209,7 +172,7 @@ Push-Location $PSScriptRoot
 try {
     switch ($Target.ToLower()) {
         "help"      { Target-Help }
-        "workspace" { Target-Workspace }
+        "deps-head" { Target-DepsHead }
         "gen"       { Target-Gen }
         "tidy"      { Target-Tidy }
         "build"     { Target-Build }

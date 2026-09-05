@@ -10,26 +10,10 @@ import (
 	"github.com/mikefsq/goalpaca/registry"
 )
 
-// A driver name resolves at runtime to one of three things, and the layout a
-// deployment uses is whatever the resolution says: some drivers compiled in,
-// some as installed binaries, in any mix.
-//
-//  1. Compiled in: the name is in the driver registry, so the orchestrator
-//     constructs the device in process.
-//  2. An installed binary: the entry names one with "exec", or a binary named
-//     for the driver is on PATH or in the orchestrator's own directory. The
-//     supervisor launches it with the entry's file and the register discovery
-//     mode.
-//  3. Unresolved: neither, which -check reports and serve skips.
-//
-// Compiled in wins when both exist, so a driver moves to a separate binary by
-// removing it from hurd.conf.
-
 // resolution says how a device entry's driver will run.
 type resolution struct {
 	kind resolutionKind
-	// exe and args are set for a binary: the executable path and the arguments
-	// the supervisor launches it with.
+	// exe and args are the command for an installed binary.
 	exe  string
 	args []string
 }
@@ -52,9 +36,8 @@ func (k resolutionKind) String() string {
 	return "unresolved"
 }
 
-// resolveDriver decides how spec's driver runs. adminPath is the entry's
-// device file, passed to a binary as -config; an inline entry has none and can
-// only be compiled in.
+// resolveDriver prefers a compiled-in driver, then an installed binary.
+// Only device-file entries can use installed binaries.
 func resolveDriver(spec DeviceSpec) resolution {
 	if _, ok := registry.Lookup(spec.Driver); ok {
 		return resolution{kind: compiledIn}
@@ -70,10 +53,8 @@ func resolveDriver(spec DeviceSpec) resolution {
 	return resolution{kind: installedBinary, exe: exe, args: args}
 }
 
-// findBinary locates the executable for a driver: the entry's "exec" key when
-// set, else a file named for the driver beside the orchestrator's own binary,
-// else one on PATH. It returns "" when none is found or the candidate is not
-// executable.
+// findBinary checks exec, then the driver name beside alpacahurd and on PATH.
+// It returns an empty string if no executable is found.
 func findBinary(spec DeviceSpec) string {
 	if e := execKey(spec); e != "" {
 		if p, err := exec.LookPath(e); err == nil {
