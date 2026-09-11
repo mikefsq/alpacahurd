@@ -450,10 +450,10 @@ func TestOrchestratorPage(t *testing.T) {
 		t.Errorf("/setup/server should land on the orchestrator page:\n%s", pg)
 	}
 	body := get("/setup")
-	for _, want := range []string{"foc", "in process", "11600", "Foc", `/setup/v1/focuser/0/setup`,
-		"wid", "separate binary", bin, "-discovery register",
-		"gone", "driver not compiled in", "in-process", "sim-focuser</option>",
-		"off", "11603", "disabled"} {
+	for _, want := range []string{"foc", "Enabled · Not verified", "Driver State", "Service State", "11600", "Foc", `/setup/v1/focuser/0/setup`,
+		"wid", "separate binary", "Not applicable",
+		"gone", "driver not compiled in", "in-process",
+		"off", "11603", "Disabled · Not verified"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page missing %q", want)
 		}
@@ -474,7 +474,7 @@ func TestOrchestratorPage(t *testing.T) {
 	b, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
 	added := filepath.Join(root, "devices.d", "guide-cam.json")
-	if !strings.Contains(string(b), "wrote "+added) {
+	if !strings.Contains(string(b), "Created guide-cam") || resp.Request.Method != http.MethodGet || resp.Request.URL.Path != "/setup/edit" {
 		t.Fatalf("add:\n%s", b)
 	}
 	m, err := devicemain.ReadDeviceFile(added)

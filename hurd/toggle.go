@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -45,7 +46,20 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 		return "", fmt.Errorf("no device %q", inst)
 	}
 	source := o.rows[idxs[0]].spec.Source
-	if err := writeStateEnable(inst, on); err != nil {
+	if on {
+		data, err := os.ReadFile(source)
+		if err != nil {
+			return "", err
+		}
+		proposed, err := deviceEnableText(string(data), true)
+		if err != nil {
+			return "", err
+		}
+		if _, _, err := validateDeviceEdit(ctx, o.rows[idxs[0]].spec, proposed); err != nil {
+			return "", fmt.Errorf("%s not enabled: %w", inst, err)
+		}
+	}
+	if err := writeDeviceEnable(source, on); err != nil {
 		return "", fmt.Errorf("record the switch: %w", err)
 	}
 	cur, err := loadDeviceFile(source, stateDevicesDir())
@@ -87,7 +101,7 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 		o.replaceRows(idxs, []orchRow{{spec: cur, res: res, port: cur.Port}})
 		if res.kind == installedBinary {
 			if _, none := o.sup.(noSupervisor); none {
-				return fmt.Sprintf("%s disabled in its state file; no supervisor here to stop it", inst), nil
+				return fmt.Sprintf("%s disabled in its configuration file; no supervisor here to stop it", inst), nil
 			}
 			var errs []string
 			if err := o.sup.Stop(ctx, inst); err != nil {
@@ -97,7 +111,7 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 				errs = append(errs, "disable at boot: "+err.Error())
 			}
 			if len(errs) > 0 {
-				return "", fmt.Errorf("%s disabled in its state file, but %s: %v", inst, o.sup.Name(), errs)
+				return "", fmt.Errorf("%s disabled in its configuration file, but %s: %v", inst, o.sup.Name(), errs)
 			}
 			return fmt.Sprintf("%s disabled: stopped under %s and off at boot", inst, o.sup.Name()), nil
 		}
@@ -113,7 +127,7 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 	case compiledIn:
 		subs, err := subSpecs(cur)
 		if err != nil {
-			_ = writeStateEnable(inst, false)
+			_ = writeDeviceEnable(source, false)
 			o.replaceRows(idxs, []orchRow{{spec: cur, res: res, port: cur.Port, skipped: err.Error()}})
 			return "", fmt.Errorf("%s not enabled: %w", inst, err)
 		}
@@ -127,7 +141,7 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 			msg, err := o.startInProcess(&row)
 			if err != nil {
 				// Reset the persisted switch on failure; already started blocks remain active.
-				_ = writeStateEnable(inst, false)
+				_ = writeDeviceEnable(source, false)
 				row.skipped = err.Error()
 				o.replaceRows(idxs, append(newRows, row))
 				return "", fmt.Errorf("%s not enabled: %w", inst, err)
@@ -144,7 +158,7 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 	case installedBinary:
 		o.replaceRows(idxs, []orchRow{{spec: cur, res: res, port: cur.Port}})
 		if _, none := o.sup.(noSupervisor); none {
-			return fmt.Sprintf("%s enabled in its state file; no supervisor here to start it (alpacahurd -launch %s runs it by hand)", inst, inst), nil
+			return fmt.Sprintf("%s enabled in its configuration file; no supervisor here to start it (alpacahurd -launch %s runs it by hand)", inst, inst), nil
 		}
 		if err := o.sup.Install(ctx, inst); err != nil {
 			return "", err
@@ -157,7 +171,7 @@ func (o *orchestrator) setEnabled(ctx context.Context, inst string, on bool) (st
 		}
 		return fmt.Sprintf("%s enabled: started under %s and on at boot", inst, o.sup.Name()), nil
 	}
-	_ = writeStateEnable(inst, false)
+	_ = writeDeviceEnable(source, false)
 	o.replaceRows(idxs, []orchRow{{spec: cur, res: res, port: cur.Port, skipped: "driver not compiled in and no binary found"}})
 	return "", fmt.Errorf("%s not enabled: its driver %q is not compiled in and no binary was found", inst, cur.Driver)
 }

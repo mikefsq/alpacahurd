@@ -220,6 +220,12 @@ func TestEnableDisableInProcess(t *testing.T) {
 	if !strings.Contains(body, "guide enabled: serving as camera 0 on port 11733") {
 		t.Fatalf("enable:\n%s", body)
 	}
+	if body := post("restart"); !strings.Contains(body, "restart guide: done") {
+		t.Fatalf("internal restart: %s", body)
+	}
+	if !orch.rows[0].spec.enabled() {
+		t.Fatal("restart disabled simulator")
+	}
 	// Served on its port.
 	resp, err := http.Get("http://127.0.0.1:11733/management/v1/configureddevices")
 	if err != nil {
@@ -230,17 +236,21 @@ func TestEnableDisableInProcess(t *testing.T) {
 	if !strings.Contains(string(b), `"DeviceName":"Guide"`) {
 		t.Fatalf("configureddevices: %s", b)
 	}
-	// The switch is in the state file and the overlay honours it over the file.
+	// The switch is persisted in the device configuration.
 	cfg2, err := LoadConfig(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !cfg2.Devices[0].enabled() {
-		t.Fatal("state enable did not override the admin file's false")
+		t.Fatal("configuration enable was not saved")
 	}
 	// The row is in process now, with a reload and a disable button.
-	if pg := post("logs"); !strings.Contains(pg, "in process") {
-		t.Fatalf("page after enable:\n%s", pg)
+	if !orch.rows[0].inProcess || !orch.rows[0].spec.enabled() {
+		t.Fatal("enabled row not active")
+	}
+	saved, err := readJSONObject(filepath.Join(root, "devices.d", "guide.json"))
+	if err != nil || string(saved["enable"]) != "true" {
+		t.Fatal("enable not written to devices.d")
 	}
 
 	body = post("disable")
@@ -255,14 +265,14 @@ func TestEnableDisableInProcess(t *testing.T) {
 	}
 	cfg3, _ := LoadConfig(cfgPath)
 	if cfg3.Devices[0].enabled() {
-		t.Fatal("state enable false not recorded")
+		t.Fatal("configuration enable false not recorded")
 	}
 	// Enable again lands on the same, still running server.
 	if body := post("enable"); !strings.Contains(body, "on port 11733") {
 		t.Fatalf("re-enable:\n%s", body)
 	}
 
-	writeFile(t, filepath.Join(root, "devices.d", "mount.json"), `{"driver":"asiam5","port":11735,"enable":false}`)
+	writeFile(t, filepath.Join(root, "devices.d", "mount.json"), `{"driver":"sim-camera","port":11735,"enable":false,"pixelCountX":"invalid"}`)
 	mspec, err := loadDeviceFile(filepath.Join(root, "devices.d", "mount.json"), stateDevicesDir())
 	if err != nil {
 		t.Fatal(err)
@@ -335,6 +345,9 @@ func TestEditDeviceFile(t *testing.T) {
 	resp.Body.Close()
 	if !strings.Contains(string(b), "saved "+devFile) || !strings.Contains(string(b), "enable the device") {
 		t.Fatalf("save:\n%s", b)
+	}
+	if resp.Request.Method != http.MethodGet || resp.Request.URL.Path != "/setup" || strings.Contains(string(b), `id="config-editor"`) {
+		t.Fatal("successful save did not navigate back to the device list")
 	}
 	if got, _ := os.ReadFile(devFile); !strings.Contains(string(got), `"port": 11741`) {
 		t.Fatalf("file after save: %s", got)

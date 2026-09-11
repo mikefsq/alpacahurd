@@ -12,6 +12,13 @@ func launchArgv(cfg *Config, cfgPath, instance string) (exe string, args []strin
 		if spec.Instance != instance {
 			continue
 		}
+		// The parent skips a disabled entry when it decides which units to start, but nothing
+		// stops systemd from starting one anyway — a restart job queued before the entry was
+		// switched off, a hand-typed `systemctl start`, the template's WantedBy at boot. Refusing
+		// here is what makes `enable` mean the same thing on every path into the device.
+		if !spec.enabled() {
+			return "", nil, fmt.Errorf("device %q is disabled in %s; enable it before launching", instance, spec.Source)
+		}
 		res := resolveDriver(spec)
 		switch res.kind {
 		case installedBinary:

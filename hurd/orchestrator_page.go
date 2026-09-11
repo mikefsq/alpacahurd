@@ -2,7 +2,6 @@ package hurd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
@@ -17,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mikefsq/goalpaca/devicemain"
 	"github.com/mikefsq/goalpaca/registry"
 	alpacadev "github.com/mikefsq/goalpaca/server"
 )
@@ -97,6 +95,54 @@ func registeredState(e *alpacadev.Registration) string {
 		where = e.Addr.String()
 	}
 	return fmt.Sprintf("registered from %s, %s ago", where, age.Round(time.Second))
+}
+
+// restart restarts an installed service or recreates every running device block
+// for an in-process instance. It never restarts the orchestrator itself.
+func (o *orchestrator) restart(ctx context.Context, instance string) error {
+	o.mu.RLock()
+	var rows []orchRow
+	for _, row := range o.rows {
+		if instance != "" && row.spec.Instance == instance {
+			rows = append(rows, row)
+		}
+	}
+	type target struct {
+		srv *alpacadev.Server
+		typ alpacadev.DeviceType
+		num int
+	}
+	var targets []target
+	for _, row := range rows {
+		if row.inProcess {
+			targets = append(targets, target{o.servers[row.port], row.devType, row.num})
+		}
+	}
+	o.mu.RUnlock()
+	if len(rows) == 0 {
+		return fmt.Errorf("no configured device %q to restart", instance)
+	}
+	if !rows[0].spec.enabled() {
+		return fmt.Errorf("%s is disabled; enable it before restarting", instance)
+	}
+	if len(targets) > 0 {
+		for _, t := range targets {
+			if t.srv == nil {
+				return fmt.Errorf("%s has no running device server", instance)
+			}
+			if err := t.srv.Reload(ctx, t.typ, t.num); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if rows[0].res.kind != installedBinary {
+		return fmt.Errorf("%s is not running; enable it to start it", instance)
+	}
+	if rows[0].reg != nil && !rows[0].reg.Local {
+		return fmt.Errorf("%s runs on another host; restart it there", instance)
+	}
+	return o.sup.Restart(ctx, instance)
 }
 
 // reload reloads a configured instance or an unconfigured registration by uniqueID.
@@ -181,7 +227,7 @@ func deviceTypeOf(spec DeviceSpec, dev alpacadev.Device) alpacadev.DeviceType {
 
 // setupPages returns the orchestrator setup, check, add, and edit pages.
 func (o *orchestrator) setupPages() map[string]http.Handler {
-	return map[string]http.Handler{"check": o, "add": o, "edit": o}
+	return map[string]http.Handler{"check": o, "add": o, "edit": o, "logs": o, "readiness": o}
 }
 
 // redirectPages links device servers to the orchestrator using the requested host.
@@ -211,6 +257,8 @@ func (o *orchestrator) pagePort() int {
 func (o *orchestrator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/setup")
 	switch {
+	case rest == "/readiness":
+		o.handleReadiness(w, r)
 	case rest == "" || rest == "/":
 		if r.Method == http.MethodPost {
 			o.handleAction(w, r)
@@ -231,6 +279,10 @@ func (o *orchestrator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		o.render(w, r, "", "")
+	case rest == "/edit/check":
+		o.handleEditCheck(w, r)
+	case rest == "/logs", rest == "/logs/tail":
+		o.handleLogs(w, r)
 	case rest == "/edit":
 		o.handleEdit(w, r)
 	default:
@@ -249,17 +301,19 @@ func (o *orchestrator) handleAction(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	var err error
 	switch action {
-	case "reload":
-		err = o.reload(ctx, inst, r.PostForm.Get("uniqueid"))
-	case "logs":
-		var b strings.Builder
-		if err := o.sup.Logs(ctx, inst, 100, &b); err != nil {
-			o.render(w, r, fmt.Sprintf("logs %s: %v", inst, err), "error")
+	case "delete":
+		err = o.deleteDevice(ctx, inst)
+		if err == nil {
+			http.Redirect(w, r, "/setup", http.StatusSeeOther)
 			return
 		}
-		o.renderOutput(w, r, b.String())
+	case "restart", "reload":
+		action = "restart"
+		err = o.restart(ctx, inst)
+	case "logs":
+		http.Redirect(w, r, "/setup/logs?"+url.Values{"instance": {inst}}.Encode(), http.StatusSeeOther)
 		return
-	case "start", "stop", "restart":
+	case "start", "stop":
 		// Compiled-in drivers cannot be launched through the supervisor.
 		if kind, known := o.resolutionKind(inst); known && kind != installedBinary {
 			err = fmt.Errorf("%s: its driver is %s, not a separate binary; the enable/disable switch runs it", inst, kind)
@@ -267,11 +321,25 @@ func (o *orchestrator) handleAction(w http.ResponseWriter, r *http.Request) {
 		}
 		switch action {
 		case "start":
-			err = o.sup.Start(ctx, inst)
+			spec, checkErr := o.editableSpec(inst)
+			if checkErr == nil {
+				var data []byte
+				data, checkErr = os.ReadFile(spec.Source)
+				if checkErr == nil {
+					var warning string
+					spec, warning, checkErr = validateDeviceEdit(ctx, spec, string(data))
+					if checkErr == nil && (!spec.enabled() || warning != "") {
+						checkErr = fmt.Errorf("enable the device and complete its configuration before starting it")
+					}
+				}
+			}
+			if checkErr != nil {
+				err = checkErr
+			} else {
+				err = o.sup.Start(ctx, inst)
+			}
 		case "stop":
 			err = o.sup.Stop(ctx, inst)
-		case "restart":
-			err = o.sup.Restart(ctx, inst)
 		}
 	case "enable", "disable":
 		ectx, ecancel := context.WithTimeout(r.Context(), enableTimeout)
@@ -306,18 +374,13 @@ func (o *orchestrator) resolutionKind(inst string) (resolutionKind, bool) {
 	return unresolved, false
 }
 
-// handleAdd writes a disabled device file from a compiled-in driver schema.
+// handleAdd writes a disabled device file from a compiled-in or installed driver schema.
 func (o *orchestrator) handleAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		o.render(w, r, "could not read the form", "error")
 		return
 	}
 	driver, inst := r.PostForm.Get("driver"), strings.TrimSpace(r.PostForm.Get("instance"))
-	drv, ok := registry.Lookup(driver)
-	if !ok {
-		o.render(w, r, fmt.Sprintf("driver %q is not compiled in", driver), "error")
-		return
-	}
 	if inst == "" || strings.ContainsAny(inst, `/\`) || strings.HasPrefix(inst, ".") {
 		o.render(w, r, "the instance name must be a plain filename stem", "error")
 		return
@@ -328,8 +391,16 @@ func (o *orchestrator) handleAdd(w http.ResponseWriter, r *http.Request) {
 		o.render(w, r, fmt.Sprintf("%s exists already", path), "error")
 		return
 	}
-	var b strings.Builder
-	if err := devicemain.WriteCommentedDeviceFile(&b, drv, examplePortBase); err != nil {
+	// Do not let new configurations inherit unrelated settings from stale state.
+	if _, err := os.Stat(filepath.Join(stateDevicesDir(), inst+".json")); err == nil {
+		o.render(w, r, "This instance name already has saved state. Choose a new name to create a disabled device.", "error")
+		return
+	} else if !os.IsNotExist(err) {
+		o.render(w, r, err.Error(), "error")
+		return
+	}
+	text, err := newDeviceTemplate(r.Context(), o.cfgPath, driver)
+	if err != nil {
 		o.render(w, r, err.Error(), "error")
 		return
 	}
@@ -337,7 +408,7 @@ func (o *orchestrator) handleAdd(w http.ResponseWriter, r *http.Request) {
 		o.render(w, r, err.Error(), "error")
 		return
 	}
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
 		o.render(w, r, fmt.Sprintf("write %s: %v", path, err), "error")
 		return
 	}
@@ -347,7 +418,7 @@ func (o *orchestrator) handleAdd(w http.ResponseWriter, r *http.Request) {
 		o.cfg.Devices = append(o.cfg.Devices, spec)
 		o.mu.Unlock()
 	}
-	o.render(w, r, fmt.Sprintf("wrote %s: uncomment the keys it needs, then enable it in the table above", path), "ok")
+	http.Redirect(w, r, "/setup/edit?"+url.Values{"instance": {inst}, "created": {"1"}}.Encode(), http.StatusSeeOther)
 }
 
 // handleEdit displays or validates and saves a known instance configuration file.
@@ -356,36 +427,36 @@ func (o *orchestrator) handleEdit(w http.ResponseWriter, r *http.Request) {
 		o.render(w, r, "", "")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := r.ParseForm(); err != nil {
 		o.render(w, r, "could not read the form", "error")
 		return
 	}
 	inst, text := r.PostForm.Get("instance"), r.PostForm.Get("text")
+	original, err := o.editableSpec(inst)
+	if err != nil {
+		o.render(w, r, err.Error(), "error")
+		return
+	}
+	spec, warning, err := validateDeviceEdit(r.Context(), original, text)
+	if err != nil {
+		o.render(w, r, fmt.Sprintf("%s not saved: %v", inst, err), "error")
+		return
+	}
 	o.mu.Lock()
 	var row *orchRow
 	for i := range o.rows {
-		if o.rows[i].spec.Instance == inst && o.rows[i].spec.Source != "" {
+		if o.rows[i].spec.Instance == inst && o.rows[i].spec.Source == original.Source {
 			row = &o.rows[i]
 			break
 		}
 	}
 	if row == nil {
 		o.mu.Unlock()
-		o.render(w, r, fmt.Sprintf("no device file for %q", inst), "error")
+		o.render(w, r, "Device configuration changed; check the draft again.", "error")
 		return
 	}
-	path := row.spec.Source
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(devicemain.StripComments([]byte(text)), &m); err != nil {
-		o.mu.Unlock()
-		o.render(w, r, fmt.Sprintf("%s not saved: not valid JSON: %v", inst, err), "error")
-		return
-	}
-	if _, ok := m["driver"]; !ok {
-		o.mu.Unlock()
-		o.render(w, r, fmt.Sprintf("%s not saved: the file names no \"driver\"", inst), "error")
-		return
-	}
+	path := original.Source
 	if !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
@@ -394,28 +465,22 @@ func (o *orchestrator) handleEdit(w http.ResponseWriter, r *http.Request) {
 		o.render(w, r, fmt.Sprintf("%s not saved: %v", inst, err), "error")
 		return
 	}
-	msg := fmt.Sprintf("saved %s", path)
-	if spec, err := loadDeviceFile(path, stateDevicesDir()); err == nil {
-		row.spec = spec
-		row.res = resolveDriver(spec)
-		if !row.inProcess {
-			row.skipped = ""
+	row.spec = spec
+	row.res = resolveDriver(spec)
+	if !row.inProcess {
+		row.skipped = ""
+	}
+	for i := range o.cfg.Devices {
+		if o.cfg.Devices[i].Instance == inst {
+			o.cfg.Devices[i] = spec
 		}
-		for i := range o.cfg.Devices {
-			if o.cfg.Devices[i].Instance == inst {
-				o.cfg.Devices[i] = spec
-			}
-		}
-		if row.inProcess {
-			msg += "; reload the device to apply it"
-		} else if spec.enabled() {
-			msg += "; enable the device to start it"
-		}
-	} else {
-		msg += fmt.Sprintf("; it does not load as a device file: %v", err)
 	}
 	o.mu.Unlock()
-	o.render(w, r, msg, "ok")
+	query := url.Values{"saved": {inst}}
+	if warning != "" {
+		query.Set("draft", "1")
+	}
+	http.Redirect(w, r, "/setup?"+query.Encode(), http.StatusSeeOther)
 }
 
 // writeFileAtomic replaces path through a temporary file and rename.
@@ -427,10 +492,45 @@ func writeFileAtomic(path string, b []byte) error {
 	return os.Rename(tmp, path)
 }
 
+// devicePageRow uses reported identity first, then configured values. A heartbeat
+// describes a daemon but does not report an Alpaca device number.
+func devicePageRow(row orchRow) pageRow {
+	pr := pageRow{Instance: row.spec.Instance, Driver: row.spec.Driver,
+		Type: string(row.devType), Name: row.deviceName, Num: "Automatic",
+		Skipped: row.skipped, Enabled: row.spec.enabled()}
+	if row.inProcess {
+		pr.Num = fmt.Sprint(row.num)
+	} else if row.spec.Device != nil {
+		pr.Num = fmt.Sprint(*row.spec.Device)
+	}
+	if !row.inProcess && registeredState(row.reg) != "" {
+		pr.Type = row.reg.DeviceType
+		pr.Name = row.reg.DeviceName
+	}
+	if pr.Type == "" {
+		if drv, ok := registry.Lookup(row.spec.Driver); ok {
+			pr.Type = string(drv.Type)
+		}
+	}
+	pr.Type = displayValue(pr.Type, "Unknown")
+	pr.Name = displayValue(pr.Name, row.spec.Name)
+	pr.Name = displayValue(pr.Name, row.spec.Instance)
+	pr.Name = displayValue(pr.Name, row.spec.Driver)
+	return pr
+}
+
+func displayValue(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
 // pageRow is one rendered row.
 type pageRow struct {
 	Instance, Driver, Type, Name, How, Port, State, Setup, Argv, Skipped string
-	Num                                                                  int
+	Num                                                                  string
+	ServiceState                                                         string
 	Enabled, Running, Actions                                            bool
 	// Reload controls the reload button. UniqueID identifies an unconfigured registration.
 	Reload   bool
@@ -455,33 +555,50 @@ type pageView struct {
 	BannerKind string
 	CheckOut   string
 	CheckKind  string
-	// EditInstance selects the device file editor.
+	// EditPage selects the dedicated editor layout, including editor errors.
+	AddPage      bool
+	AddDriver    string
+	AddInstance  string
+	EditPage     bool
 	EditInstance string
 	EditPath     string
 	EditText     string
+	EditorJS     template.JS
+	ReadinessJS  template.JS
 }
 
 func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, kind string) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	view := pageView{
-		ConfigDir:  filepath.Dir(o.cfgPath),
-		StateDir:   stateDirRoot(),
-		Supervisor: o.sup.Name(),
-		Version:    version,
-		Port:       o.page,
-		Uptime:     time.Since(o.startedAt).Round(time.Second).String(),
+		ConfigDir:   filepath.Dir(o.cfgPath),
+		StateDir:    stateDirRoot(),
+		Supervisor:  o.sup.Name(),
+		Version:     version,
+		ReadinessJS: template.JS(readinessJS),
+		Port:        o.page,
+		Uptime:      time.Since(o.startedAt).Round(time.Second).String(),
+		EditPage:    strings.HasSuffix(r.URL.Path, "/edit"),
+		AddPage:     strings.HasSuffix(r.URL.Path, "/add"),
 	}
 	if strings.HasSuffix(r.URL.Path, "/check") || kind == "output" {
 		view.CheckOut, view.CheckKind = banner, kind
 	} else {
 		view.Banner, view.BannerKind = banner, kind
 	}
-	if inst := r.URL.Query().Get("instance"); inst != "" && strings.HasSuffix(r.URL.Path, "/edit") {
+	inst := r.URL.Query().Get("instance")
+	if r.Method == http.MethodPost && view.EditPage {
+		inst = r.PostForm.Get("instance")
+	}
+	if inst != "" && view.EditPage {
+		view.EditorJS = template.JS(editorScript) // embedded source, never user input
+
 		for _, row := range o.rows {
 			if row.spec.Instance == inst && row.spec.Source != "" {
 				view.EditInstance, view.EditPath = inst, row.spec.Source
-				if b, err := os.ReadFile(row.spec.Source); err == nil {
+				if r.Method == http.MethodPost {
+					view.EditText = r.PostForm.Get("text")
+				} else if b, err := os.ReadFile(row.spec.Source); err == nil {
 					view.EditText = string(b)
 				} else {
 					view.EditText = "// " + err.Error()
@@ -490,14 +607,66 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 		}
 	}
 	view.CSS = template.CSS(alpacadev.DefaultSetupTemplates().CSS)
+	if view.AddPage {
+		known := map[string]bool{}
+		for _, d := range registry.All() {
+			known[d.Name] = true
+		}
+		installed, err := installedDrivers(o.cfgPath)
+		for name := range installed {
+			known[name] = true
+		}
+		for name := range known {
+			view.Drivers = append(view.Drivers, name)
+		}
+		sort.Strings(view.Drivers)
+		if err != nil && view.Banner == "" {
+			view.Banner, view.BannerKind = err.Error(), "warn"
+		}
+		if r.Method == http.MethodPost {
+			view.AddDriver, view.AddInstance = r.PostForm.Get("driver"), r.PostForm.Get("instance")
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = orchTmpl.Execute(w, view)
+		return
+	}
+	if view.EditPage {
+		if view.EditInstance != "" && r.Method == http.MethodGet && r.URL.Query().Get("created") == "1" {
+			view.Banner, view.BannerKind = "Created "+view.EditInstance+". Configure it below; it remains disabled until you enable it from the device list.", "ok"
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if view.EditInstance == "" && view.Banner == "" {
+			view.Banner, view.BannerKind = "Device configuration not found.", "error"
+			w.WriteHeader(http.StatusNotFound)
+		}
+		_ = orchTmpl.Execute(w, view)
+		return
+	}
+	if saved := r.URL.Query().Get("saved"); saved != "" && r.Method == http.MethodGet && view.Banner == "" {
+		for _, row := range o.rows {
+			if row.spec.Instance != saved || row.spec.Source == "" {
+				continue
+			}
+			view.Banner, view.BannerKind = fmt.Sprintf("saved %s", row.spec.Source), "ok"
+			if row.inProcess || registeredState(row.reg) != "" {
+				view.Banner += "; restart the device to apply it"
+			} else if row.spec.enabled() {
+				view.Banner += "; enable the device to start it"
+			} else {
+				view.Banner += "; the device remains disabled"
+				if r.URL.Query().Get("draft") == "1" {
+					view.Banner += ". Draft saved; driver configuration still needs attention before enabling."
+					view.BannerKind = "warn"
+				}
+			}
+			break
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	for _, row := range o.rows {
-		pr := pageRow{
-			Instance: row.spec.Instance, Driver: row.spec.Driver, Type: string(row.devType),
-			Name: row.deviceName, Num: row.num, Skipped: row.skipped,
-			Enabled: row.spec.enabled(),
-		}
+		pr := devicePageRow(row)
+
 		if pr.Instance == "" {
 			pr.Instance = "(inline)"
 		}
@@ -515,7 +684,7 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 			pr.Toggle = row.spec.Instance != "" && row.res.kind == compiledIn
 			pr.Actions = row.spec.Instance != "" && row.res.kind == installedBinary
 		case regState != "":
-			pr.How, pr.State, pr.Running = "separate binary", regState, true
+			pr.How, pr.State, pr.Running = "separate binary", "enabled", true
 			pr.Port = fmt.Sprint(row.reg.AlpacaPort)
 			host := hostOf(r)
 			if !row.reg.Local {
@@ -549,18 +718,25 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 			pr.Actions = true
 			if row.port != 0 {
 				pr.Port = fmt.Sprint(row.port)
-				pr.Setup = fmt.Sprintf("http://%s:%d/setup/v1/%s/%d/setup", hostOf(r), row.port, row.devType, row.num)
+				pr.Setup = fmt.Sprintf("http://%s:%d/setup", hostOf(r), row.port)
 			}
+			pr.State = "enabled"
+		}
+		pr.ServiceState = "Not applicable"
+		_, noService := o.sup.(noSupervisor)
+		if row.res.kind == installedBinary && row.spec.Instance != "" && !noService && (row.reg == nil || row.reg.Local) {
 			st, err := o.sup.Status(ctx, row.spec.Instance)
 			if err != nil {
-				pr.State = "status: " + err.Error()
+				pr.ServiceState = "status: " + err.Error()
 			} else {
-				pr.State, pr.Running = st.State, st.Running
+				pr.ServiceState = displayValue(st.State, "Unknown")
+				pr.Running = pr.Running || st.Running
 				if !st.Installed {
-					pr.State = "not installed with " + o.sup.Name()
+					pr.ServiceState = "not installed"
 				}
 			}
 		}
+
 		view.Rows = append(view.Rows, pr)
 	}
 	var extraKeys []string
@@ -583,23 +759,14 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 			inst = "(unconfigured)"
 		}
 		view.Rows = append(view.Rows, pageRow{
-			Instance: inst, Type: e.DeviceType, Name: e.DeviceName,
-			How: "registered", State: state, Running: true, Port: fmt.Sprint(e.AlpacaPort),
+			Instance: inst, Type: displayValue(e.DeviceType, "Unknown"), Name: displayValue(e.DeviceName, inst), Num: "Unknown",
+			How: "registered", State: state, ServiceState: "Not applicable", Enabled: true, Running: true, Port: fmt.Sprint(e.AlpacaPort),
 			Setup:  fmt.Sprintf("http://%s:%d/setup", host, e.AlpacaPort),
 			Reload: true, UniqueID: e.UniqueID,
 		})
 	}
-	for _, d := range registry.All() {
-		view.Drivers = append(view.Drivers, d.Name)
-	}
-	sort.Strings(view.Drivers)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = orchTmpl.Execute(w, view)
-}
-
-// renderOutput renders the page with text (a log tail) in the output pane.
-func (o *orchestrator) renderOutput(w http.ResponseWriter, r *http.Request, text string) {
-	o.render(w, r, text, "output")
 }
 
 // hostOf returns the requested host without its port.
@@ -612,52 +779,163 @@ func hostOf(r *http.Request) string {
 }
 
 var orchTmpl = template.Must(template.New("hurd").Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><title>alpacahurd</title><style>{{.CSS}}
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{if .EditPage}}Edit {{.EditInstance}} — {{else if .AddPage}}Add device — {{end}}alpacahurd</title><style>{{.CSS}}
+body{max-width:90rem}
+.readiness-label{display:inline-block;padding:.2rem .55rem;border:1px solid #536071;border-radius:.35rem;white-space:nowrap;font-size:.9rem}
+.readiness-label.ok{color:#b6dfc0;background:#1d3025;border-color:#50775b}
+.readiness-label.warn{color:#edd395;background:#342c1b;border-color:#806936}
+.readiness-label.error{color:#efb6b6;background:#352224;border-color:#805052}
+
+body>form{max-width:52rem}
+body.editor-page{max-width:64rem}
+.editor-page>form{max-width:none}
+.editor-page nav{margin-bottom:1.25rem}
+.page-actions{display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;margin:.5rem 0 1rem}
+.page-actions a{display:inline-flex;align-items:center;min-height:2.75rem}
+#config-editor textarea{height:clamp(16rem,45vh,32rem)}
+.editor-buttons a{display:inline-flex;align-items:center;min-height:2.75rem;padding:.5rem}
+table{min-width:0}
+td,th{overflow-wrap:normal}
+td:nth-child(-n+5),th{white-space:nowrap}
+td:last-child,th:last-child{width:1%;white-space:nowrap}
+td code{display:block;max-width:22rem;margin-top:.25rem;overflow-wrap:anywhere}
+.editor-buttons{display:flex;flex-wrap:wrap;gap:.75rem}
 td.num{text-align:right}
-form.inline{display:inline}
-button.small{font-size:.85rem;padding:.2rem .6rem;margin:0 .1rem}
+form.inline{display:inline-flex;flex-wrap:wrap;gap:.4rem;margin:.35rem .4rem .35rem 0;vertical-align:top}
+button.small{font-size:.8rem;padding:.5rem .7rem}
+.page-actions button.nav-link{background:none;border:0;border-radius:0;padding:0;min-height:2.75rem;color:var(--accent);font:inherit;text-decoration:underline;text-underline-offset:.2em;box-shadow:none}
+.page-actions button.nav-link:hover{color:#c5d9fa;background:none}
+.device-list-heading{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin:2rem 0 1rem;padding-top:1rem;border-top:1px solid var(--line)}
+.device-list-heading h2{margin:0;padding:0;border:0}
+.device-filter{display:flex;align-items:center;gap:.5rem;margin:0;font-size:.9rem}
+.device-filter select{width:auto}
+tr[hidden]{display:none}
+.device-actions{display:flex;gap:.75rem;align-items:center;white-space:nowrap}
+.device-actions form.inline{display:block;margin:0}
+.device-toggle{display:inline-flex;align-items:center;justify-content:center;min-width:2.75rem;padding:.5rem;background:transparent!important;border-color:transparent!important;color:var(--text)!important}
+.toggle-track{display:inline-block;width:2.4rem;height:1.4rem;border-radius:1rem;background:#465262;border:1px solid #798595;position:relative}
+.toggle-track:after{content:"";position:absolute;top:.15rem;left:.15rem;width:1rem;height:1rem;border-radius:50%;background:#e0e6ef}
+.device-toggle[aria-checked=true] .toggle-track{background:#30543d;border-color:#79a888}
+.device-toggle[aria-checked=true] .toggle-track:after{left:1.15rem}
+.device-menu summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:center;min-width:2.75rem;min-height:2.75rem;border:1px solid var(--line);border-radius:.4rem;font-size:1.4rem}
+.device-menu summary::-webkit-details-marker{display:none}
+.device-menu[open] summary{background:var(--input)}
+.device-menu-panel{margin:0;inset:auto;width:max-content;max-width:calc(100vw - 16px);display:flex;gap:.4rem;position:fixed;z-index:1000;min-width:9rem;padding:.4rem;background:var(--panel);border:1px solid var(--line);border-radius:.5rem;box-shadow:0 .5rem 1.5rem #0008}
+.device-menu-panel form+form{margin-top:0!important}
+.device-menu-panel button{width:100%;min-height:44px}
+.device-menu-panel form.inline{display:block;margin:0}
+.device-menu-panel[hidden]{display:none!important}
+button[value=stop],button[value=disable]{background:#302329;border-color:#79545d;color:#edbcc5}
+button[value=stop]:hover,button[value=disable]:hover{background:#443039;border-color:#b4808d}
+.device-menu:not([open]) .device-menu-panel{display:none}
+.mobile-port{display:none}
+@media(max-width:700px){
+ body{padding:1.25rem 1rem calc(6rem + env(safe-area-inset-bottom) + var(--viewport-bottom,0px));min-width:0}
+ h1{font-size:1.65rem}
+ .page-actions{gap:.4rem 1rem}
+ .page-actions a,.page-actions button.nav-link{display:inline-flex;align-items:center;min-height:44px}
+ input,select,textarea{font-size:16px!important}
+ button.small{min-height:44px;font-size:1rem}
+ .device-list-heading{margin-top:1.25rem}
+ .device-filter{width:100%;justify-content:space-between}
+ .device-filter select{max-width:75%;flex:1}
+ .table-scroll{overflow:visible;border:0;background:transparent}
+ table,tbody{display:block;width:100%;min-width:0}
+ table{border:0;background:transparent}
+ tr:has(>th){position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+ tr[data-device-enabled]{display:block;background:var(--panel);border:1px solid var(--line);border-radius:.65rem;margin-bottom:1rem;overflow:visible}
+ tr[data-device-enabled][hidden]{display:none}
+ tr[data-device-enabled] td{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.65rem .85rem;min-width:0;white-space:normal;border:0;overflow-wrap:anywhere;text-align:right}
+ tr[data-device-enabled] td:before{content:attr(data-label);flex:0 0 5.5rem;text-align:left;font-size:.8rem;color:var(--muted)}
+ tr[data-device-enabled] td:first-child{border-bottom:1px solid var(--line);font-weight:650;padding-top:.85rem;padding-bottom:.85rem}
+ tr[data-device-enabled] td:last-child{border-top:1px solid var(--line);min-width:0;width:auto}
+ tr[data-device-enabled] td.device-name:before{display:none}
+ tr[data-device-enabled] td.device-name{text-align:left}
+ .device-name>span:first-child{min-width:0;overflow-wrap:anywhere}
+ .mobile-port{display:block;flex-shrink:0;color:var(--muted);font-weight:400;font-size:.85rem}
+ tr[data-device-enabled] td.device-port{display:none}
+ .readiness-label{white-space:normal;text-align:right;max-width:100%;font-size:.85rem}
+ .device-actions{justify-content:flex-end;gap:1rem}
+ .device-menu-panel{right:auto;bottom:auto;min-width:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.35rem;padding:.65rem;box-shadow:0 -.5rem 2rem #0009}
+ .device-menu-panel{height:calc(44px + 1.3rem + 2px);max-height:calc(100dvh - 16px);grid-template-rows:44px;grid-auto-rows:44px;align-items:start;align-content:start;overflow:auto}
+ .device-menu-panel>form.inline{height:44px;min-height:0;align-self:start}
+ .device-menu-panel button{padding:.5rem .2rem;min-width:0;height:44px;max-height:44px;align-self:start}
+ /* One compact mobile row, retaining the desktop table markup. */
+ tr[data-device-enabled]{display:grid;grid-template-columns:2.75rem minmax(0,1fr) auto minmax(0,1fr) 2.75rem;gap:.3rem;align-items:center;padding:.5rem}
+ tr[data-device-enabled] td.device-name{display:contents}
+ .device-name>span:first-child{grid-column:2;grid-row:1;font-size:.8rem}
+ .mobile-port{grid-column:3;grid-row:1;font-size:.75rem}
+ tr[data-device-enabled] td[data-readiness],tr[data-device-enabled] td[data-label="Driver State"]{grid-column:4;grid-row:1;display:block;padding:0;text-align:left}
+ tr[data-device-enabled] td:before{display:none}
+ tr[data-device-enabled] td:last-child,.device-actions{display:contents;border:0}
+ .device-actions>form{grid-column:1;grid-row:1}
+ .device-actions>.device-menu{grid-column:5;grid-row:1}
+ .device-toggle{padding:0;min-height:44px}
+ .readiness-label{padding:.2rem .3rem;font-size:.7rem;text-align:left;line-height:1.3}
+ .device-menu summary{min-width:44px;min-height:44px}
+ .editor-page>form{padding:.85rem}
+ .editor-buttons{gap:.5rem}
+}
 </style></head>
-<body>
-<h1>alpacahurd</h1>
-<p class="sub">{{.Version}} · listening on port {{.Port}} · up {{.Uptime}}<br>config <code>{{.ConfigDir}}</code><br>state <code>{{.StateDir}}</code><br>supervisor {{.Supervisor}}</p>
-{{with .Banner}}<div class="banner {{$.BannerKind}}">{{.}}</div>{{end}}
-<h2>Devices</h2>
-<table>
-<tr><th>Instance</th><th>Driver</th><th>Type</th><th class="num">#</th><th>Name</th><th>How</th><th>Port</th><th>State</th><th></th></tr>
-{{range .Rows}}<tr>
-<td>{{.Instance}}</td><td>{{.Driver}}</td><td>{{.Type}}</td><td class="num">{{.Num}}</td><td>{{.Name}}</td>
-<td>{{.How}}{{with .Argv}}<br><code>{{.}}</code>{{end}}</td>
-<td>{{.Port}}</td>
-<td>{{.State}}{{if not .Enabled}}{{if .State}} · {{end}}disabled{{end}}{{with .Skipped}}<br>{{.}}{{end}}</td>
-<td>{{with .Setup}}<a href="{{.}}">setup</a>{{end}}{{if .Edit}} <a href="/setup/edit?instance={{.Instance}}">edit</a>{{end}}
-{{if .Actions}}
-<form class="inline" method="post" action="/setup"><input type="hidden" name="instance" value="{{.Instance}}">
-{{if .Running}}<button class="small" name="action" value="stop">stop</button><button class="small" name="action" value="restart">restart</button>{{else}}<button class="small" name="action" value="start">start</button>{{end}}
-{{if .Enabled}}<button class="small" name="action" value="disable">disable</button>{{else}}<button class="small" name="action" value="enable">enable</button>{{end}}
-<button class="small" name="action" value="logs">logs</button>
-</form>{{end}}
-{{if .Toggle}}<form class="inline" method="post" action="/setup"><input type="hidden" name="instance" value="{{.Instance}}">{{if .Enabled}}{{if not .Running}}<button class="small" name="action" value="enable" title="construct the device and serve it now">start</button>{{end}}<button class="small" name="action" value="disable" title="close the hardware and remove the device; the switch is recorded in its state file">disable</button>{{else}}<button class="small" name="action" value="enable" title="construct the device and serve it now; the switch is recorded in its state file">enable</button>{{end}}</form>{{end}}
-{{if .Reload}}<form class="inline" method="post" action="/setup"><input type="hidden" name="instance" value="{{.Instance}}"><input type="hidden" name="uniqueid" value="{{.UniqueID}}"><button class="small" name="action" value="reload" title="re-read the device's configuration and reopen its hardware; the port stays">reload</button></form>{{end}}</td>
-</tr>{{end}}
-</table>
-<h2>Check</h2>
-<p><a href="/setup/check">Run the config check</a> (what <code>alpacahurd -check</code> prints).</p>
-{{with .CheckOut}}<pre class="result">{{.}}</pre>{{end}}
+<body{{if or .EditPage .AddPage}} class="editor-page"{{end}}>
+{{if .EditPage}}
+<nav aria-label="Back"><a href="/setup">← Back to devices</a></nav>
+<h1>{{if .EditInstance}}Edit {{.EditInstance}}{{else}}Edit configuration{{end}}</h1>
+<p class="sub">Check your changes, then save to return to the device list.</p>
+{{with .Banner}}<div class="banner {{$.BannerKind}}" role="alert">{{.}}</div>{{end}}
 {{if .EditInstance}}
-<h2>Edit {{.EditInstance}}</h2>
-<form method="post" action="/setup/edit">
+<form id="config-editor" method="post" action="/setup/edit">
 <input type="hidden" name="instance" value="{{.EditInstance}}">
 <p class="sub"><code>{{.EditPath}}</code></p>
-<textarea name="text" rows="24" style="width:100%;font-family:ui-monospace,monospace">{{.EditText}}</textarea>
-<p><button type="submit">Save</button>
-<span class="help">The file is the admin file, JSON with <code>//</code> and <code>/* */</code> comments allowed; it is checked before it is written. A running device picks the change up on reload; a disabled one when enabled.</span></p>
+<textarea name="text" rows="18" aria-label="Device configuration">{{.EditText}}</textarea>
+<div id="syntax-status" class="banner" role="status" aria-live="polite">Checking JSON syntax…</div>
+<div id="config-status" class="banner" role="status" aria-live="polite">Configuration has not been checked.</div>
+<p class="editor-buttons"><button id="check-config" type="button" disabled>Check configuration</button>
+<button id="save-config" type="submit" disabled>Save</button>
+<a href="/setup">Cancel</a></p>
+<noscript><p>Enable JavaScript to check this draft and save it.</p></noscript>
+<p>
+<span class="help">The file is the admin file, JSON with <code>//</code> and <code>/* */</code> comments allowed; it is checked before it is written. A running device picks the change up on restart; a disabled one when enabled.</span></p>
 </form>
+<script>{{.EditorJS}}</script>
 {{end}}
-<h2>Add a device</h2>
+{{else if .AddPage}}
+<nav aria-label="Back"><a href="/setup">← Back to devices</a></nav>
+<h1>Add a device</h1>
+<p class="sub">Choose a compiled-in or installed driver. Create a disabled device, then configure it on the next page.</p>
+{{with .Banner}}<div class="banner {{$.BannerKind}}" role="alert">{{.}}</div>{{end}}
 <form method="post" action="/setup/add">
-<label><span class="lab">Driver</span><select name="driver">{{range .Drivers}}<option>{{.}}</option>{{end}}</select></label>
-<label><span class="lab">Instance name</span><input type="text" name="instance" placeholder="main-camera"></label>
-<button type="submit">Write device file</button>
-<span class="help">Writes <code>devices.d/&lt;instance&gt;.json</code> with every key commented at its default and enable false. Edit it, then enable it in the table above.</span>
+<label><span class="lab">Driver</span><select name="driver">{{range .Drivers}}<option value="{{.}}"{{if eq . $.AddDriver}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+<label><span class="lab">Instance name</span><input type="text" name="instance" placeholder="main-camera" value="{{.AddInstance}}"></label>
+<p class="editor-buttons"><button type="submit">Create and configure</button><a href="/setup">Cancel</a></p>
+<span class="help">Writes <code>devices.d/&lt;instance&gt;.json</code> with every key commented at its default and enable false. The next page opens its configuration editor. Enable it from the device list when ready.</span>
 </form>
+{{else}}
+<h1>alpacahurd</h1>
+<nav class="page-actions" aria-label="Management">
+<a href="/setup/logs" target="_blank" rel="noopener">Logs ↗</a>
+<a href="/setup/check">Check configuration</a>
+<a href="/setup/add">Add device</a>
+<button type="button" id="refresh-readiness" class="nav-link">Refresh status</button>
+</nav>
+<p class="sub">{{.Version}} · listening on port {{.Port}} · up {{.Uptime}}<br>config <code>{{.ConfigDir}}</code><br>state <code>{{.StateDir}}</code><br>supervisor {{.Supervisor}}</p>
+{{with .Banner}}<div class="banner {{$.BannerKind}}">{{.}}</div>{{end}}
+{{with .CheckOut}}<h2>Configuration check</h2><pre class="result">{{.}}</pre>{{end}}
+<div class="device-list-heading"><h2>Devices</h2><label class="device-filter" for="device-state-filter">Show <select id="device-state-filter"><option value="all">All states</option><option value="enabled">Enabled only</option><option value="disabled">Disabled only</option></select></label></div>
+<div class="table-scroll" role="region" aria-label="Devices" tabindex="0">
+<table>
+<tr><th>Name</th><th>Port</th><th>Driver State</th><th>Enabled</th></tr>
+{{range .Rows}}<tr data-device-enabled="{{.Enabled}}">
+<td data-label="Name" class="device-name"><span>{{if and .Enabled .Running .Setup}}<a href="{{.Setup}}" title="Open device setup">{{.Name}}</a>{{else}}{{.Name}}{{end}}</span><span class="mobile-port">{{if .Port}}{{.Port}}{{else}}Automatic{{end}}</span></td>
+<td data-label="Port" class="device-port">{{if .Port}}{{.Port}}{{else}}Automatic{{end}}</td>
+<td data-label="Driver State" {{if .Edit}}data-readiness="{{.Instance}}"{{end}}><span class="readiness-label neutral">{{if .Enabled}}Enabled{{else}}Disabled{{end}} · Not verified</span></td>
+<td data-label="Enabled"><div class="device-actions">
+<form class="inline" method="post" action="/setup"><input type="hidden" name="instance" value="{{.Instance}}"><button class="device-toggle" type="submit" role="switch" aria-checked="{{.Enabled}}" aria-label="Enable {{.Instance}}" name="action" value="{{if .Enabled}}disable{{else}}enable{{end}}" {{if not (or .Actions .Toggle)}}disabled{{end}} title="{{if .Enabled}}Disable and stop this device{{else}}Enable and start this device{{end}}"><span class="toggle-track" aria-hidden="true"></span></button></form>
+<details class="device-menu"><summary aria-label="More actions for {{.Instance}}" title="More actions">⋯</summary><div class="device-menu-panel">{{if and .Enabled .Running .Setup}}<form class="inline" method="get" action="{{.Setup}}"><button class="small" type="submit">Setup</button></form>{{else}}<button class="small" type="button" disabled title="Setup is available when the device is enabled and running">Setup</button>{{end}}{{if .Edit}}<form class="inline" method="get" action="/setup/edit"><input type="hidden" name="instance" value="{{.Instance}}"><button class="small" type="submit">Edit</button></form>{{else}}<button class="small" type="button" disabled>Edit</button>{{end}}<form class="inline" method="post" action="/setup"><input type="hidden" name="instance" value="{{.Instance}}"><button class="small" name="action" value="restart" {{if not (and .Enabled .Running (or .Actions (and .Toggle .Reload)))}}disabled{{end}} title="Restart the driver and reread its configuration">Restart</button></form><form class="inline" method="post" action="/setup"><input type="hidden" name="instance" value="{{.Instance}}"><button class="small" name="action" value="delete" {{if or (not .Edit) .Enabled .Running}}disabled{{end}} title="Delete this device configuration; disable and stop it first">Delete</button></form></div></details>
+</div></td>
+</tr>{{end}}
+</table>
+</div>
+{{end}}
+<script>{{.ReadinessJS}}</script>
 </body></html>`))

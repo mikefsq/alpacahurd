@@ -105,6 +105,17 @@ func (s *systemdSupervisor) Logs(ctx context.Context, instance string, n int, w 
 	return err
 }
 
+// LogsAll includes the orchestrator and every device service, even stopped or
+// removed instances whose journal entries remain. The rest of the host is excluded.
+func (s *systemdSupervisor) LogsAll(ctx context.Context, n int, w io.Writer) error {
+	out, err := s.run(ctx, "journalctl", "-u", "alpacahurd.service", "-u", systemdUnitTemplate+"*.service", "-n", strconv.Itoa(n), "--no-pager", "-o", "short-iso")
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(w, out+"\n")
+	return err
+}
+
 // parseKeyValues reads Key=Value lines, systemctl show's output.
 func parseKeyValues(out string) map[string]string {
 	m := map[string]string{}

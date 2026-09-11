@@ -1,6 +1,7 @@
 package hurd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -53,8 +54,14 @@ func loadDeviceFile(path, stateDir string) (DeviceSpec, error) {
 	if err != nil {
 		return DeviceSpec{}, err
 	}
+	return deviceSpecFromAdmin(path, stateDir, admin)
+}
+
+// deviceSpecFromAdmin applies the same state overlay to disk and editor input.
+func deviceSpecFromAdmin(path, stateDir string, admin map[string]json.RawMessage) (DeviceSpec, error) {
 	instance := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	var state map[string]json.RawMessage
+	var err error
 	if stateDir != "" {
 		sp := filepath.Join(stateDir, instance+".json")
 		if state, err = readJSONObject(sp); err != nil && !os.IsNotExist(err) {
@@ -82,19 +89,17 @@ func readJSONObject(path string) (map[string]json.RawMessage, error) {
 }
 
 // overlay merges state and admin settings, returning pinned driver keys.
-// Admin values win except enable, which uses the state value when present.
+// Admin values win. Enable belongs exclusively to the device configuration.
 func overlay(admin, state map[string]json.RawMessage) (merged map[string]json.RawMessage, pinned map[string]bool) {
 	merged = make(map[string]json.RawMessage, len(admin)+len(state))
 	for k, v := range state {
+		if strings.EqualFold(k, "enable") {
+			continue
+		}
 		merged[k] = v
 	}
 	pinned = map[string]bool{}
 	for k, v := range admin {
-		if strings.EqualFold(k, "enable") {
-			if _, fromState := merged[k]; fromState {
-				continue
-			}
-		}
 		merged[k] = v
 		if !isCommonKey(k) {
 			pinned[k] = true
@@ -103,19 +108,70 @@ func overlay(admin, state map[string]json.RawMessage) (merged map[string]json.Ra
 	return merged, pinned
 }
 
-// writeStateEnable persists the enable switch for a devices.d entry.
-func writeStateEnable(instance string, on bool) error {
-	store := alpacadev.NewFileStore()
-	path := filepath.Join(stateDevicesDir(), instance+".json")
-	vals, err := store.Load(path)
+// deviceEnableText changes only top-level enable values, retaining JSONC comments.
+func deviceEnableText(text string, on bool) (string, error) {
+	clean, err := editorJSON(text)
+	if err != nil {
+		return "", err
+	}
+	if !json.Valid(clean) {
+		return "", fmt.Errorf("invalid device JSON")
+	}
+	dec := json.NewDecoder(bytes.NewReader(clean))
+	token, err := dec.Token()
+	if err != nil || token != json.Delim('{') {
+		return "", fmt.Errorf("device configuration must be an object")
+	}
+	type span struct{ start, end int }
+	var spans []span
+	keys := 0
+	for dec.More() {
+		keys++
+		key, err := dec.Token()
+		if err != nil {
+			return "", err
+		}
+		start := int(dec.InputOffset())
+		for start < len(clean) && (clean[start] == ':' || bytes.ContainsRune([]byte(" \t\r\n"), rune(clean[start]))) {
+			start++
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return "", err
+		}
+		if strings.EqualFold(key.(string), "enable") {
+			spans = append(spans, span{start, int(dec.InputOffset())})
+		}
+	}
+	value := "false"
+	if on {
+		value = "true"
+	}
+	for i := len(spans) - 1; i >= 0; i-- {
+		r := spans[i]
+		text = text[:r.start] + value + text[r.end:]
+	}
+	if len(spans) == 0 {
+		start := bytes.IndexByte(clean, '{') + 1
+		comma := ""
+		if keys > 0 {
+			comma = ","
+		}
+		text = text[:start] + "\n  \"enable\": " + value + comma + text[start:]
+	}
+	return text, nil
+}
+
+func writeDeviceEnable(path string, on bool) error {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	if vals == nil {
-		vals = map[string]any{}
+	text, err := deviceEnableText(string(data), on)
+	if err != nil {
+		return err
 	}
-	vals["enable"] = on
-	return store.Save(path, vals)
+	return writeFileAtomic(path, []byte(text))
 }
 
 var commonKeySet = func() map[string]bool {
