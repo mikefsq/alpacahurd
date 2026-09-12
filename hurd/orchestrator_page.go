@@ -820,10 +820,10 @@ tr[hidden]{display:none}
 .device-menu summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:center;min-width:2.75rem;min-height:2.75rem;border:1px solid var(--line);border-radius:.4rem;font-size:1.4rem}
 .device-menu summary::-webkit-details-marker{display:none}
 .device-menu[open] summary{background:var(--input)}
-.device-menu-panel{margin:0;inset:auto;width:max-content;max-width:calc(100vw - 16px);display:flex;gap:.4rem;position:fixed;z-index:1000;min-width:9rem;padding:.4rem;background:var(--panel);border:1px solid var(--line);border-radius:.5rem;box-shadow:0 .5rem 1.5rem #0008}
+.device-menu-panel{margin:0;inset:auto;width:22rem;max-width:calc(100vw - 16px);display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-template-rows:44px;align-items:start;gap:.4rem;position:fixed;z-index:1000;min-width:9rem;padding:.4rem;background:var(--panel);border:1px solid var(--line);border-radius:.5rem;box-shadow:0 .5rem 1.5rem #0008}
 .device-menu-panel form+form{margin-top:0!important}
-.device-menu-panel button{width:100%;min-height:44px}
-.device-menu-panel form.inline{display:block;margin:0}
+.device-menu-panel button{width:100%;min-width:0;min-height:44px;height:44px;white-space:nowrap;overflow-wrap:normal;word-break:normal}
+.device-menu-panel form.inline{display:block;min-width:0;height:44px;margin:0}
 .device-menu-panel[hidden]{display:none!important}
 button[value=stop],button[value=disable]{background:#302329;border-color:#79545d;color:#edbcc5}
 button[value=stop]:hover,button[value=disable]:hover{background:#443039;border-color:#b4808d}

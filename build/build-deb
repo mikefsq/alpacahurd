@@ -160,6 +160,7 @@ build_one () {
 
     install -m 0644 "$SRC_DIR/README.md" "$root/usr/share/doc/$PKG/README.md"
     install -m 0644 "$SRC_DIR/DRIVERS.md" "$root/usr/share/doc/$PKG/DRIVERS.md"
+    install -m 0644 "$SRC_DIR/LICENSE" "$root/usr/share/doc/$PKG/LICENSE"
     write_copyright "$root/usr/share/doc/$PKG/copyright"
     write_changelog | gzip -9n > "$root/usr/share/doc/$PKG/changelog.Debian.gz"
     chmod 0644 "$root/usr/share/doc/$PKG/changelog.Debian.gz"
@@ -213,12 +214,12 @@ Source: $HOMEPAGE
 
 Files: *
 Copyright: $(sed -n 's/^Copyright \(.*\)$/\1/p' "$SRC_DIR/LICENSE" | head -1)
-License: MIT
+License: GPL-3
 
-License: MIT
+License: GPL-3
 EOF
         # Debian copyright continuations use indentation and " ." for blank lines.
-        sed -e '1,/^$/d' -e 's/^$/./' -e 's/^/ /' "$SRC_DIR/LICENSE"
+        sed -e 's/^$/./' -e 's/^/ /' "$SRC_DIR/LICENSE"
     } > "$1"
     chmod 0644 "$1"
 }

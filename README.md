@@ -299,3 +299,9 @@ try a complete set without hardware:
 ```sh
 ./alpacahurd -config config/hurd.sim.json
 ```
+
+## License
+
+alpacahurd is released under the [GNU General Public License, version 3](LICENSE)
+(SPDX: `GPL-3.0-only`). Dependencies and separately installed drivers retain
+their own licenses.
