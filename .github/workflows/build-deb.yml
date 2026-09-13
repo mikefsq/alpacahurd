@@ -29,13 +29,32 @@ permissions:
 jobs:
   build-deb:
     name: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
       with:
         # Version derivation requires tags and commit history.
         fetch-depth: 0
+
+    - name: Select release source
+      id: source
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        if [[ -n "$VERSION" ]]; then
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([~+.-][0-9A-Za-z.+~-]+)?$ ]] || {
+            echo '::error::Use a version such as 1.2.3, without a leading v'
+            exit 1
+          }
+          dpkg --validate-version "$VERSION"
+          if git show-ref --verify --quiet "refs/tags/v$VERSION"; then
+            git checkout --detach "refs/tags/v$VERSION"
+          fi
+        fi
+        echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -52,7 +71,12 @@ jobs:
         go vet ./...
 
     - name: Build packages
-      run: build/build-deb ${{ inputs.version && format('-v {0}', inputs.version) || '' }}
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        args=(-a 'amd64 arm64')
+        if [[ -n "$VERSION" ]]; then args+=(-v "$VERSION"); fi
+        build/build-deb "${args[@]}"
 
     - name: Upload packages
       uses: actions/upload-artifact@v6
@@ -62,18 +86,30 @@ jobs:
         if-no-files-found: error
 
   install-test:
-    name: install test
+    name: install test (${{ matrix.arch }})
     needs: build-deb
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      DEB_ARCH: ${{ matrix.arch }}
     steps:
     - name: Download packages
-      uses: actions/download-artifact@v6
+      uses: actions/download-artifact@v8.0.1
       with:
         name: alpacahurd-deb
         path: dist
 
     - name: Install
-      run: sudo apt-get install -y ./dist/alpacahurd_*_amd64.deb
+      run: |
+        test "$(dpkg --print-architecture)" = "$DEB_ARCH"
+        sudo apt-get install -y ./dist/alpacahurd_*_"${DEB_ARCH}".deb
 
     - name: Check the service is running
       run: |
@@ -127,30 +163,59 @@ jobs:
     name: release
     needs: [build-deb, install-test]
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
-    - name: Download packages
-      uses: actions/download-artifact@v6
-      with:
-        name: alpacahurd-deb
-        path: dist
-
-    - name: Create the release and attach the packages
-      # Create a new release and tag; never replace assets already published to apt.
-      env:
-        GH_TOKEN: ${{ github.token }}
-        TAG: v${{ inputs.version }}
-      run: |
-        if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-          echo "::error::$TAG already exists — release a new version rather than replacing it"
-          exit 1
-        fi
-        gh release create "$TAG" dist/*.deb \
-          --repo "$GITHUB_REPOSITORY" \
-          --target "$GITHUB_SHA" \
-          --title "$TAG" \
-          --generate-notes \
-          ${{ inputs.prerelease && '--prerelease' || '' }}
-        echo "Released $TAG. Run 'Publish archive' in mikefsq/apt to reach the fleet." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.build-deb.outputs.source_sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: alpacahurd-deb
+          path: dist
+      - name: Create release and attach packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ inputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          SOURCE_SHA: ${{ needs.build-deb.outputs.source_sha }}
+        run: |
+          # Resolve annotated and lightweight tags to their commit on GitHub.
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            tagged_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
+            if [[ "$tagged_sha" != "$SOURCE_SHA" ]]; then
+              echo "::error::$TAG does not point to the tested commit $SOURCE_SHA"
+              exit 1
+            fi
+          fi
+          # A manual rerun may find an already-published release. Keep existing
+          # assets immutable; only upload any missing architecture packages.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets,isDraft > release.json 2>/dev/null; then
+            jq -e '.isDraft == false' release.json >/dev/null || {
+              echo "::error::$TAG is a draft; finish or remove the draft first"
+              exit 1
+            }
+            for arch in amd64 arm64; do
+              asset="alpacahurd_${TAG#v}_${arch}.deb"
+              test -s "dist/$asset"
+              if ! jq -e --arg name "$asset" '.assets[] | select(.name == $name and .size > 0)' release.json >/dev/null; then
+                gh release upload "$TAG" "dist/$asset" --repo "$GITHUB_REPOSITORY"
+              fi
+            done
+            echo "$TAG is published with amd64 and arm64 packages; existing assets preserved." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          args=()
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            args+=(--verify-tag)
+          else
+            args+=(--target "$SOURCE_SHA")
+          fi
+          if [[ "$PRERELEASE" == true ]]; then args+=(--prerelease); fi
+          gh release create "$TAG" dist/*.deb \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" --generate-notes "${args[@]}"
+          echo "Released $TAG with amd64 and arm64 packages. APT archive publication is a separate step." >> "$GITHUB_STEP_SUMMARY"
