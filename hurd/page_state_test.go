@@ -23,7 +23,7 @@ func (s *pageStateSupervisor) Status(context.Context, string) (InstanceStatus, e
 	}
 	return InstanceStatus{Installed: true, Running: true, State: "active (running)"}, nil
 }
-func TestSeparateDriverAndSystemdState(t *testing.T) {
+func TestDriverReadinessIndependentOfSystemdState(t *testing.T) {
 	o, _, _ := editorFixture(t)
 	sup := &pageStateSupervisor{}
 	o.sup = sup
@@ -36,7 +36,9 @@ func TestSeparateDriverAndSystemdState(t *testing.T) {
 				o.rows[0].reg = &alpacadev.Registration{Seen: time.Now(), Local: true}
 			}
 			page := logGet(o, "/setup").Body.String()
-			if !strings.Contains(page, "<th>Driver State</th><th>Systemd State</th>") || !strings.Contains(page, "<td>active (running)</td>") {
+			// Service state belongs to the logs view; readiness stays unverified
+			// until the client requests a device check.
+			if !strings.Contains(page, "<th>Driver State</th><th>Enabled</th>") || strings.Contains(page, "<th>Systemd State</th>") {
 				t.Fatal(page)
 			}
 			expected := "Disabled · Not verified"
@@ -56,13 +58,13 @@ func TestSeparateDriverAndSystemdState(t *testing.T) {
 	}
 	sup.fail = true
 	page := logGet(o, "/setup").Body.String()
-	if !strings.Contains(page, "<td>status: service unavailable</td>") || !strings.Contains(page, "Enabled · Not verified") {
+	if !strings.Contains(page, "Enabled · Not verified") || strings.Contains(page, "status: service unavailable") {
 		t.Fatal(page)
 	}
 	o.rows[0].inProcess = true
 	o.rows[0].res.kind = compiledIn
 	page = logGet(o, "/setup").Body.String()
-	if !strings.Contains(page, "<td>Not applicable</td>") || sup.calls != 5 {
+	if !strings.Contains(page, "Enabled · Not verified") || sup.calls != 5 {
 		t.Fatal("queried systemd for built-in driver")
 	}
 }

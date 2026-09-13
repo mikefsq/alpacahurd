@@ -320,8 +320,8 @@ func TestEditDeviceFile(t *testing.T) {
 	resp, _ := http.Get(ts.URL + "/setup")
 	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if !strings.Contains(string(b), `/setup/edit?instance=cam`) {
-		t.Fatalf("no edit link:\n%s", b)
+	if !strings.Contains(string(b), `method="get" action="/setup/edit"><input type="hidden" name="instance" value="cam"`) {
+		t.Fatalf("no edit form:\n%s", b)
 	}
 	resp, _ = http.Get(ts.URL + "/setup/edit?instance=cam")
 	b, _ = io.ReadAll(resp.Body)

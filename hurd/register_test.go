@@ -171,7 +171,7 @@ func TestBuildDeviceErrors(t *testing.T) {
 	}{
 		// Required binding fields are still enforced by the driver.
 		{`{"driver":"tenmicron"}`, "addr"},
-		{`{"driver":"asiam5"}`, "serial"},
+		{`{"driver":"asiam5","serial":42}`, "serial"},
 		// A typo in a DRIVER-owned key is rejected by the driver's strict decode.
 		{`{"driver":"asieaf","serail":"x"}`, "serail"},
 		// A wrongly-typed driver key is rejected too.
@@ -185,6 +185,12 @@ func TestBuildDeviceErrors(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 			t.Errorf("buildDevice(%s): err %v, want mention of %q", c.entry, err, c.wantErr)
 		}
+	}
+}
+
+func TestMountAllowsAutomaticDiscovery(t *testing.T) {
+	if _, _, err := buildDevice(parseSpec(t, `{"driver":"asiam5"}`)); err != nil {
+		t.Fatalf("mount without an explicit serial should allow discovery: %v", err)
 	}
 }
 

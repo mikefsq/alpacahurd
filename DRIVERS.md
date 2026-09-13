@@ -211,8 +211,10 @@ make fat
 ```
 
 `make fat` regenerates `drivers_gen.go` and builds with the `fat` tag.
-`make build` excludes that file. Use `make deps-head` to update mikefsq
-dependencies to their latest `main` commits.
+`make build` excludes that file. Use `make deps` to download the recorded
+release versions. To update the bundled drivers, use
+`go get github.com/mikefsq/goalpaca-devices@<release-tag>` and then `make tidy`.
+All bundled driver packages share the root module version.
 
 A compiled-in driver takes precedence over an installed binary with the same
 name. To run it as a separate process, remove its import from `hurd.conf` and

@@ -450,9 +450,9 @@ func TestOrchestratorPage(t *testing.T) {
 		t.Errorf("/setup/server should land on the orchestrator page:\n%s", pg)
 	}
 	body := get("/setup")
-	for _, want := range []string{"foc", "Enabled · Not verified", "Driver State", "Service State", "11600", "Foc", `/setup/v1/focuser/0/setup`,
-		"wid", "separate binary", "Not applicable",
-		"gone", "driver not compiled in", "in-process",
+	for _, want := range []string{"foc", "Enabled · Not verified", "Driver State", "Enabled", "11600", "Foc", `/setup/v1/focuser/0/setup`,
+		"wid", "Check configuration",
+		"gone", "in-process",
 		"off", "11603", "Disabled · Not verified"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page missing %q", want)

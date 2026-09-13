@@ -1,6 +1,8 @@
 # alpacahurd — build and install the herd. Run `make help` for the targets.
 #
 
+export GOWORK := off
+
 BIN := alpacahurd
 
 UNAME_S := $(shell uname -s)
@@ -10,7 +12,7 @@ else
 CGO ?= 0
 endif
 
-.PHONY: all help gen build fat deb tidy deps-head test install uninstall clean
+.PHONY: all help gen build fat deb tidy deps test install uninstall clean
 
 all: build ## Build the orchestrator with simulators
 
@@ -33,17 +35,11 @@ fat: gen ## Build ./alpacahurd with the drivers listed in hurd.conf
 deb: ## Build Debian packages in dist/
 	build/build-deb
 
-deps-head: ## Update mikefsq dependencies to their latest main commits
-	@export GOWORK=off; \
-	self="$$(go list -m)" || exit $$?; \
-	mods="$$(grep -oE 'github.com/mikefsq/[a-zA-Z0-9./-]+' go.mod | sort -u | grep -vxF "$$self")"; \
-	[ -n "$$mods" ] || { echo "deps-head: no github.com/mikefsq dependencies in go.mod"; exit 0; }; \
-	echo "$$mods" | sed 's/^/  /'; \
-	go get $$(echo "$$mods" | sed 's/$$/@main/' | tr '\n' ' ')
+deps: ## Download the dependency versions recorded in go.mod
+	go mod download
 
-tidy: ## Regenerate imports, update dependencies to main, and tidy modules
+tidy: ## Regenerate imports and tidy the recorded module dependencies
 	go run ./internal/gendrivers
-	$(MAKE) deps-head
 	go mod tidy
 
 test: ## Run the Go test suite

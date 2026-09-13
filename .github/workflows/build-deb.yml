@@ -43,8 +43,13 @@ jobs:
         go-version-file: go.mod
         cache: true
 
-    - name: Vet
-      run: go vet ./...
+    - name: Test and vet
+      env:
+        GOWORK: off
+        GOFLAGS: -mod=readonly
+      run: |
+        go test ./...
+        go vet ./...
 
     - name: Build packages
       run: build/build-deb ${{ inputs.version && format('-v {0}', inputs.version) || '' }}
