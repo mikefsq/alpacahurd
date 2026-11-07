@@ -39,18 +39,21 @@ else
 	chmod 0644 "$CONF_DST"
 	echo "installed server config -> $CONF_DST"
 fi
-# Preserve existing device files.
-"$BIN_DST" -example-devices "$DEVICES_DIR"
-echo "device files -> $DEVICES_DIR/   *** EDIT THESE for your hardware ***"
+# Devices are added on the setup page; make seed writes disabled templates instead.
+mkdir -p "$DEVICES_DIR"
 
 echo "installing launchd unit -> $PLIST_DST"
 launchctl bootout system "$PLIST_DST" 2>/dev/null || true
 install -m 0644 "$HERE/deploy/$LABEL.plist" "$PLIST_DST"
+# launchd keeps a disabled mark across uninstalls, and bootstrap of a disabled
+# job fails with error 5.
+launchctl enable "system/$LABEL"
 launchctl bootstrap system "$PLIST_DST"
 launchctl kickstart -k "system/$LABEL"
 
 echo
 launchctl print "system/$LABEL" 2>/dev/null | head -20 || true
 echo
-echo "done. edit $CONF_DST then: sudo launchctl kickstart -k system/$LABEL"
-echo "logs: tail -f /var/log/alpacahurd.log"
+echo "done. add devices at http://$(hostname):32227/setup"
+echo "restart: sudo launchctl kickstart -k system/$LABEL"
+echo "logs: tail -f /Library/Logs/alpacahurd/alpacahurd.log"

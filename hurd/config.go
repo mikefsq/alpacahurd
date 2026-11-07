@@ -29,26 +29,24 @@ type Config struct {
 	// Debug enables per-request Alpaca logging.
 	Debug bool `json:"debug,omitempty"`
 
-	// SetupPort selects the setup page TCP port. Zero defaults to 32227;
-	// a negative value disables the page. Occupied ports trigger a port scan.
+	// SetupPort selects the setup page TCP port. Zero selects 32227, the number of the
+	// Alpaca discovery port; -1 turns the page off. A busy port stops alpacahurd.
 	SetupPort int `json:"setupPort,omitempty"`
 
 	Devices []DeviceSpec `json:"devices"`
 }
 
-// setupPort resolves the orchestrator page's port: the default when unset, or 0
-// when the page is turned off.
+// setupPort resolves the orchestrator page's port: the configured one, 32227 when unset, or
+// 0 when the page is turned off.
 func (c *Config) setupPort() int {
 	switch {
 	case c.SetupPort < 0:
 		return 0
 	case c.SetupPort == 0:
-		return defaultSetupPort
+		return discoveryPort
 	}
 	return c.SetupPort
 }
-
-const defaultSetupPort = 32227
 
 // ipv6Enabled reports whether IPv6 discovery should be answered (default true).
 func (c *Config) ipv6Enabled() bool { return c.IPv6 == nil || *c.IPv6 }

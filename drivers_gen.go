@@ -19,6 +19,7 @@ import (
 	_ "github.com/mikefsq/goalpaca-devices/onstep"
 	_ "github.com/mikefsq/goalpaca-devices/ptpcam"
 	_ "github.com/mikefsq/goalpaca-devices/rst"
+	_ "github.com/mikefsq/goalpaca-devices/scopehub"
 	_ "github.com/mikefsq/goalpaca-devices/smpro"
 	_ "github.com/mikefsq/goalpaca-devices/tenmicron"
 	_ "github.com/mikefsq/goalpaca-devices/unihedron"

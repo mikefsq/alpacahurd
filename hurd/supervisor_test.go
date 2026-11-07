@@ -261,6 +261,12 @@ func TestLaunchArgv(t *testing.T) {
 	if strings.Join(args, " ") != strings.Join(want, " ") {
 		t.Fatalf("wid args %v, want %v", args, want)
 	}
+	// A moved setup page reaches the driver's back link.
+	cfg.SetupPort = 8080
+	if _, args, _ := launchArgv(cfg, cfgPath, "wid"); !strings.HasSuffix(strings.Join(args, " "), "-hurd-port 8080") {
+		t.Fatalf("moved page: %v", args)
+	}
+	cfg.SetupPort = 0
 	if _, _, err := launchArgv(cfg, cfgPath, "foc"); err == nil || !strings.Contains(err.Error(), "compiled into") {
 		t.Fatalf("compiled-in: %v", err)
 	}
@@ -272,5 +278,13 @@ func TestLaunchArgv(t *testing.T) {
 	}
 	if got := launchCommand("/usr/local/bin/alpacahurd", cfgPath, "wid"); strings.Join(got, " ") != "/usr/local/bin/alpacahurd -launch wid -config "+cfgPath {
 		t.Fatalf("launchCommand %v", got)
+	}
+}
+
+func TestLaunchctlNeverExited(t *testing.T) {
+	out := "\tstate = running\n\tpid = 76984\n\tlast exit code = (never exited)\n"
+	state, pid, lastExit := parseLaunchctlPrint(out)
+	if state != "running" || pid != 76984 || lastExit != "" {
+		t.Fatalf("%q %d %q", state, pid, lastExit)
 	}
 }

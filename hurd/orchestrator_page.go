@@ -22,14 +22,17 @@ import (
 
 // orchestrator holds the setup page state, protected by mu.
 type orchestrator struct {
-	cfgPath   string
-	cfg       *Config
-	sup       Supervisor
-	mu        sync.RWMutex
-	rows      []orchRow
-	servers   map[int]*alpacadev.Server // by bound port
-	startedAt time.Time
-	page      int // the port the orchestrator page bound; 0 until it does
+	addDrafts map[string]*addDraft // protected by mu; short-lived browser discovery results
+	// restartSelf ends this process so it starts again; nil where that is unavailable.
+	restartSelf func()
+	cfgPath     string
+	cfg         *Config
+	sup         Supervisor
+	mu          sync.RWMutex
+	rows        []orchRow
+	servers     map[int]*alpacadev.Server // by bound port
+	startedAt   time.Time
+	page        int // the port the orchestrator page bound; 0 until it does
 	// extra holds unconfigured registrations by UniqueID or address:port.
 	extra map[string]*alpacadev.Registration
 
@@ -275,10 +278,12 @@ func (o *orchestrator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		o.render(w, r, b.String(), kind)
 	case rest == "/add":
 		if r.Method == http.MethodPost {
-			o.handleAdd(w, r)
+			o.handleAddDevice(w, r)
 			return
 		}
 		o.render(w, r, "", "")
+	case rest == "/add/options":
+		o.handleAddOptions(w, r)
 	case rest == "/edit/check":
 		o.handleEditCheck(w, r)
 	case rest == "/logs", rest == "/logs/tail":
@@ -290,10 +295,10 @@ func (o *orchestrator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleAction runs one supervisor action on one instance and re-renders.
+// handleAction runs one supervisor action on one instance, then redirects to the device list.
 func (o *orchestrator) handleAction(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		o.render(w, r, "could not read the form", "error")
+		redirectWithBanner(w, r, "could not read the form", "error")
 		return
 	}
 	inst, action := r.PostForm.Get("instance"), r.PostForm.Get("action")
@@ -304,9 +309,17 @@ func (o *orchestrator) handleAction(w http.ResponseWriter, r *http.Request) {
 	case "delete":
 		err = o.deleteDevice(ctx, inst)
 		if err == nil {
-			http.Redirect(w, r, "/setup", http.StatusSeeOther)
+			redirectWithBanner(w, r, fmt.Sprintf("deleted %s", inst), "ok")
 			return
 		}
+	case "restart-hurd":
+		if o.restartSelf == nil {
+			err = fmt.Errorf("this alpacahurd cannot restart itself")
+			break
+		}
+		redirectWithBanner(w, r, "alpacahurd is restarting; this page returns in a few seconds", "ok")
+		go o.restartSelf()
+		return
 	case "restart", "reload":
 		action = "restart"
 		err = o.restart(ctx, inst)
@@ -346,19 +359,19 @@ func (o *orchestrator) handleAction(w http.ResponseWriter, r *http.Request) {
 		defer ecancel()
 		msg, err := o.setEnabled(ectx, inst, action == "enable")
 		if err != nil {
-			o.render(w, r, fmt.Sprintf("%s %s: %v", action, inst, err), "error")
+			redirectWithBanner(w, r, fmt.Sprintf("%s %s: %v", action, inst, err), "error")
 			return
 		}
-		o.render(w, r, msg, "ok")
+		redirectWithBanner(w, r, msg, "ok")
 		return
 	default:
 		err = fmt.Errorf("unknown action %q", action)
 	}
 	if err != nil {
-		o.render(w, r, fmt.Sprintf("%s %s: %v", action, inst, err), "error")
+		redirectWithBanner(w, r, fmt.Sprintf("%s %s: %v", action, inst, err), "error")
 		return
 	}
-	o.render(w, r, fmt.Sprintf("%s %s: done", action, inst), "ok")
+	redirectWithBanner(w, r, fmt.Sprintf("%s %s: done", action, inst), "ok")
 }
 
 // resolutionKind reports how inst's driver resolves, when the table knows the
@@ -372,53 +385,6 @@ func (o *orchestrator) resolutionKind(inst string) (resolutionKind, bool) {
 		}
 	}
 	return unresolved, false
-}
-
-// handleAdd writes a disabled device file from a compiled-in or installed driver schema.
-func (o *orchestrator) handleAdd(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		o.render(w, r, "could not read the form", "error")
-		return
-	}
-	driver, inst := r.PostForm.Get("driver"), strings.TrimSpace(r.PostForm.Get("instance"))
-	if inst == "" || strings.ContainsAny(inst, `/\`) || strings.HasPrefix(inst, ".") {
-		o.render(w, r, "the instance name must be a plain filename stem", "error")
-		return
-	}
-	dir := devicesDirFor(o.cfgPath)
-	path := filepath.Join(dir, inst+".json")
-	if _, err := os.Stat(path); err == nil {
-		o.render(w, r, fmt.Sprintf("%s exists already", path), "error")
-		return
-	}
-	// Do not let new configurations inherit unrelated settings from stale state.
-	if _, err := os.Stat(filepath.Join(stateDevicesDir(), inst+".json")); err == nil {
-		o.render(w, r, "This instance name already has saved state. Choose a new name to create a disabled device.", "error")
-		return
-	} else if !os.IsNotExist(err) {
-		o.render(w, r, err.Error(), "error")
-		return
-	}
-	text, err := newDeviceTemplate(r.Context(), o.cfgPath, driver)
-	if err != nil {
-		o.render(w, r, err.Error(), "error")
-		return
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		o.render(w, r, err.Error(), "error")
-		return
-	}
-	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
-		o.render(w, r, fmt.Sprintf("write %s: %v", path, err), "error")
-		return
-	}
-	if spec, err := loadDeviceFile(path, stateDevicesDir()); err == nil {
-		o.mu.Lock()
-		o.rows = append(o.rows, orchRow{spec: spec, res: resolveDriver(spec), port: spec.Port})
-		o.cfg.Devices = append(o.cfg.Devices, spec)
-		o.mu.Unlock()
-	}
-	http.Redirect(w, r, "/setup/edit?"+url.Values{"instance": {inst}, "created": {"1"}}.Encode(), http.StatusSeeOther)
 }
 
 // handleEdit displays or validates and saves a known instance configuration file.
@@ -465,6 +431,7 @@ func (o *orchestrator) handleEdit(w http.ResponseWriter, r *http.Request) {
 		o.render(w, r, fmt.Sprintf("%s not saved: %v", inst, err), "error")
 		return
 	}
+	enabledChanged := row.spec.enabled() != spec.enabled()
 	row.spec = spec
 	row.res = resolveDriver(spec)
 	if !row.inProcess {
@@ -477,6 +444,23 @@ func (o *orchestrator) handleEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	o.mu.Unlock()
 	query := url.Values{"saved": {inst}}
+	if enabledChanged {
+		ctx, cancel := context.WithTimeout(r.Context(), enableTimeout)
+		defer cancel()
+		var message string
+		var err error
+		if spec.enabled() {
+			message, err = o.enableOrRollback(ctx, inst)
+		} else {
+			message, err = o.setEnabled(ctx, inst, false)
+			o.resyncDevice(inst)
+		}
+		if err != nil {
+			message = err.Error()
+			query.Set("applyError", "1")
+		}
+		query.Set("applied", message)
+	}
 	if warning != "" {
 		query.Set("draft", "1")
 	}
@@ -552,13 +536,13 @@ type pageView struct {
 	Rows       []pageRow
 	Drivers    []string
 	Banner     string
+	Clashes    []string // enabled devices that cannot share their port
 	BannerKind string
 	CheckOut   string
 	CheckKind  string
 	// EditPage selects the dedicated editor layout, including editor errors.
 	AddPage      bool
-	AddDriver    string
-	AddInstance  string
+	AddJS        template.JS
 	EditPage     bool
 	EditInstance string
 	EditPath     string
@@ -581,6 +565,7 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 		EditPage:    strings.HasSuffix(r.URL.Path, "/edit"),
 		AddPage:     strings.HasSuffix(r.URL.Path, "/add"),
 	}
+	view.Clashes = portClashes(o.rows)
 	if strings.HasSuffix(r.URL.Path, "/check") || kind == "output" {
 		view.CheckOut, view.CheckKind = banner, kind
 	} else {
@@ -608,6 +593,7 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 	}
 	view.CSS = template.CSS(alpacadev.DefaultSetupTemplates().CSS)
 	if view.AddPage {
+		view.AddJS = template.JS(addScript)
 		known := map[string]bool{}
 		for _, d := range registry.All() {
 			known[d.Name] = true
@@ -623,12 +609,14 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 		if err != nil && view.Banner == "" {
 			view.Banner, view.BannerKind = err.Error(), "warn"
 		}
-		if r.Method == http.MethodPost {
-			view.AddDriver, view.AddInstance = r.PostForm.Get("driver"), r.PostForm.Get("instance")
-		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = orchTmpl.Execute(w, view)
 		return
+	}
+	if id := r.URL.Query().Get("flash"); id != "" && r.Method == http.MethodGet && view.Banner == "" {
+		if text, kind, ok := takeFlash(id); ok {
+			view.Banner, view.BannerKind = text, kind
+		}
 	}
 	if view.EditPage {
 		if view.EditInstance != "" && r.Method == http.MethodGet && r.URL.Query().Get("created") == "1" {
@@ -648,14 +636,21 @@ func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, ki
 				continue
 			}
 			view.Banner, view.BannerKind = fmt.Sprintf("saved %s", row.spec.Source), "ok"
-			if row.inProcess || registeredState(row.reg) != "" {
+			if applied := r.URL.Query().Get("applied"); applied != "" {
+				view.Banner += "; " + applied
+				if r.URL.Query().Get("applyError") == "1" {
+					view.BannerKind = "error"
+				}
+			} else if row.inProcess || registeredState(row.reg) != "" {
 				view.Banner += "; restart the device to apply it"
 			} else if row.spec.enabled() {
 				view.Banner += "; enable the device to start it"
 			} else {
 				view.Banner += "; the device remains disabled"
-				if r.URL.Query().Get("draft") == "1" {
-					view.Banner += ". Draft saved; driver configuration still needs attention before enabling."
+			}
+			if r.URL.Query().Get("draft") == "1" {
+				view.Banner += ". Draft saved; driver configuration still needs attention before enabling."
+				if view.BannerKind == "ok" {
 					view.BannerKind = "warn"
 				}
 			}
@@ -801,6 +796,7 @@ td:last-child,th:last-child{width:1%;white-space:nowrap}
 td code{display:block;max-width:22rem;margin-top:.25rem;overflow-wrap:anywhere}
 .editor-buttons{display:flex;flex-wrap:wrap;gap:.75rem}
 td.num{text-align:right}
+.page-actions form.inline{margin:0}
 form.inline{display:inline-flex;flex-wrap:wrap;gap:.4rem;margin:.35rem .4rem .35rem 0;vertical-align:top}
 button.small{font-size:.8rem;padding:.5rem .7rem}
 .page-actions button.nav-link{background:none;border:0;border-radius:0;padding:0;min-height:2.75rem;color:var(--accent);font:inherit;text-decoration:underline;text-underline-offset:.2em;box-shadow:none}
@@ -902,14 +898,25 @@ button[value=stop]:hover,button[value=disable]:hover{background:#443039;border-c
 {{else if .AddPage}}
 <nav aria-label="Back"><a href="/setup">← Back to devices</a></nav>
 <h1>Add a device</h1>
-<p class="sub">Choose a compiled-in or installed driver. Create a disabled device, then configure it on the next page.</p>
+<p class="sub">Choose a driver, find your device, then add it. An unused prototype is configured first.</p>
 {{with .Banner}}<div class="banner {{$.BannerKind}}" role="alert">{{.}}</div>{{end}}
-<form method="post" action="/setup/add">
-<label><span class="lab">Driver</span><select name="driver">{{range .Drivers}}<option value="{{.}}"{{if eq . $.AddDriver}} selected{{end}}>{{.}}</option>{{end}}</select></label>
-<label><span class="lab">Instance name</span><input type="text" name="instance" placeholder="main-camera" value="{{.AddInstance}}"></label>
-<p class="editor-buttons"><button type="submit">Create and configure</button><a href="/setup">Cancel</a></p>
-<span class="help">Writes <code>devices.d/&lt;instance&gt;.json</code> with every key commented at its default and enable false. The next page opens its configuration editor. Enable it from the device list when ready.</span>
+<form id="add-device-form">
+<label><span class="lab">Driver</span><select id="add-driver"><option value="">Choose a driver</option>{{range .Drivers}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
+<p><button id="add-scan" type="button" disabled>Find devices</button></p>
+<p id="add-status" role="status" aria-live="polite"></p>
+<div id="add-error" class="banner error" role="alert" style="white-space:pre-line" hidden></div>
+<div id="add-results"></div>
+<div id="add-details" hidden>
+<p id="add-prototype"></p>
+<label><span class="lab">Name</span><input id="add-name" type="text"></label>
+<div id="add-fields"></div>
+<p class="help">An available Alpaca port is assigned automatically.</p>
+<label><input id="add-enable" type="checkbox"> Enable and start</label>
+<p class="editor-buttons"><button id="add-save" type="submit">Add device</button><a href="/setup">Cancel</a></p>
+</div>
+<noscript><p>Enable JavaScript to find and configure devices.</p></noscript>
 </form>
+<script>{{.AddJS}}</script>
 {{else}}
 <h1>alpacahurd</h1>
 <nav class="page-actions" aria-label="Management">
@@ -917,9 +924,11 @@ button[value=stop]:hover,button[value=disable]:hover{background:#443039;border-c
 <a href="/setup/check">Check configuration</a>
 <a href="/setup/add">Add device</a>
 <button type="button" id="refresh-readiness" class="nav-link">Refresh status</button>
+<form class="inline" method="post" action="/setup"><button class="nav-link" name="action" value="restart-hurd" title="Restart alpacahurd: reread every device file and reopen every device">Restart alpacahurd</button></form>
 </nav>
 <p class="sub">{{.Version}} · listening on port {{.Port}} · up {{.Uptime}}<br>config <code>{{.ConfigDir}}</code><br>state <code>{{.StateDir}}</code><br>supervisor {{.Supervisor}}</p>
 {{with .Banner}}<div class="banner {{$.BannerKind}}">{{.}}</div>{{end}}
+{{range .Clashes}}<div class="banner error">{{.}}</div>{{end}}
 {{with .CheckOut}}<h2>Configuration check</h2><pre class="result">{{.}}</pre>{{end}}
 <div class="device-list-heading"><h2>Devices</h2><label class="device-filter" for="device-state-filter">Show <select id="device-state-filter"><option value="all">All states</option><option value="enabled">Enabled only</option><option value="disabled">Disabled only</option></select></label></div>
 <div class="table-scroll" role="region" aria-label="Devices" tabindex="0">

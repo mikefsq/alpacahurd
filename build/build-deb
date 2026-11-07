@@ -214,9 +214,9 @@ Source: $HOMEPAGE
 
 Files: *
 Copyright: $(sed -n 's/^Copyright \(.*\)$/\1/p' "$SRC_DIR/LICENSE" | head -1)
-License: GPL-3
+License: AGPL-3
 
-License: GPL-3
+License: AGPL-3
 EOF
         # Debian copyright continuations use indentation and " ." for blank lines.
         sed -e 's/^$/./' -e 's/^/ /' "$SRC_DIR/LICENSE"

@@ -2,12 +2,15 @@ package hurd
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -100,6 +103,15 @@ func serve(cfg *Config, cfgPath string) {
 	if err != nil {
 		log.Fatalf("alpacahurd: %v", err)
 	}
+	// The setup page owns its port: a busy port means a second alpacahurd, which must not open
+	// the hardware the first one holds. Checked before any device opens.
+	if sp := cfg.setupPort(); sp != 0 {
+		if l, err := net.Listen("tcp", fmt.Sprintf(":%d", sp)); err != nil {
+			log.Fatalf("alpacahurd: %v", pageBusy(sp, err))
+		} else {
+			l.Close()
+		}
+	}
 
 	orch := &orchestrator{cfgPath: cfgPath, cfg: cfg, sup: platformSupervisor(cfgPath), servers: map[int]*alpacadev.Server{}, startedAt: time.Now(),
 		listenAddrs: listenAddrs, logger: logger, byPort: map[int]*alpacadev.Server{}, nums: map[int]*deviceNumbers{}}
@@ -184,6 +196,17 @@ func serve(cfg *Config, cfgPath string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	ctx, endForRestart := context.WithCancel(ctx)
+	defer endForRestart()
+	var restarting atomic.Bool
+	if canRestartSelf {
+		orch.restartSelf = func() {
+			// Let the browser load the page that says a restart is coming.
+			time.Sleep(500 * time.Millisecond)
+			restarting.Store(true)
+			endForRestart()
+		}
+	}
 	orch.ctx = ctx
 
 	for _, spec := range separate {
@@ -276,9 +299,9 @@ func serve(cfg *Config, cfgPath string) {
 
 	// Keep the setup page available even when no devices are running.
 	if sp := cfg.setupPort(); sp != 0 {
-		pageCfg := func(port, scanBase int) alpacadev.Config {
+		pageCfg := func(port int) alpacadev.Config {
 			return alpacadev.Config{
-				AlpacaPort: port, PortScanBase: scanBase, PortScanLimit: 20,
+				AlpacaPort: port,
 				Hosts:      listenAddrs,
 				Discovery:  alpacadev.DiscoveryConfig{Mode: alpacadev.DiscoveryOff},
 				ServerName: "alpacahurd", Manufacturer: "mikefsq", ManufacturerVersion: version,
@@ -287,16 +310,11 @@ func serve(cfg *Config, cfgPath string) {
 			}
 		}
 		pageErrc := make(chan error, 2)
-		pageSrv := alpacadev.New(pageCfg(sp, 0))
+		pageSrv := alpacadev.New(pageCfg(sp))
 		go func() { pageErrc <- pageSrv.Run(ctx) }()
 		p, err := waitBound(ctx, []*alpacadev.Server{pageSrv}, pageErrc)
 		if err != nil {
-			log.Printf("alpacahurd: setup page on :%d: %v; scanning from %d", sp, err, sp+1)
-			pageSrv = alpacadev.New(pageCfg(0, sp+1))
-			go func() { pageErrc <- pageSrv.Run(ctx) }()
-			if p, err = waitBound(ctx, []*alpacadev.Server{pageSrv}, pageErrc); err != nil {
-				log.Fatalf("alpacahurd: setup page: %v", err)
-			}
+			log.Fatalf("alpacahurd: %v", pageBusy(sp, err))
 		}
 		orch.setPagePort(p[0])
 		for _, line := range listenLines(p[0], listenAddrs) {
@@ -346,6 +364,20 @@ func serve(cfg *Config, cfgPath string) {
 		}
 	}
 	log.Printf("alpacahurd: shut down")
+	if restarting.Load() {
+		log.Printf("alpacahurd: restarting")
+		if err := relaunchSelf(); err != nil {
+			log.Fatalf("alpacahurd: restart: %v", err)
+		}
+	}
+}
+
+// pageBusy explains a setup page port that will not bind.
+func pageBusy(port int, err error) error {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return fmt.Errorf("port %d in use; another alpacahurd is probably running", port)
+	}
+	return fmt.Errorf("setup page on port %d: %w", port, err)
 }
 
 // nameServers uses the device identity for servers hosting exactly one device.

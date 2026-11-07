@@ -38,9 +38,8 @@ else
 	chmod 0644 "$CONF_DST"
 	echo "installed server config -> $CONF_DST"
 fi
-# Preserve existing device files.
-"$BIN_DST" -example-devices "$DEVICES_DIR"
-echo "device files -> $DEVICES_DIR/   *** EDIT THESE for your hardware ***"
+# Devices are added on the setup page; make seed writes disabled templates instead.
+mkdir -p "$DEVICES_DIR"
 # Create state storage before the service starts.
 mkdir -p "$STATE_DIR/devices"
 
@@ -58,5 +57,6 @@ systemctl enable --now alpacahurd.service
 echo
 systemctl --no-pager --full status alpacahurd.service || true
 echo
-echo "done. edit $DEVICES_DIR/*.json then: sudo systemctl restart alpacahurd"
+echo "done. add devices at http://$(hostname):32227/setup"
+echo "restart: sudo systemctl restart alpacahurd"
 echo "logs: journalctl -u alpacahurd -f"

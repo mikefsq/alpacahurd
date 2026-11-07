@@ -12,5 +12,8 @@ SUBSYSTEM=="usb", ATTRS{idVendor}=="a0a0", MODE="0660", GROUP="plugdev", TAG+="u
 # Astroasis: hidraw access for Oasis focusers and filter wheels.
 KERNEL=="hidraw*", ATTRS{idVendor}=="338f", MODE="0660", GROUP="plugdev", TAG+="uaccess"
 
+# scope_hub power and USB hub: hidraw for the scopehub driver.
+KERNEL=="hidraw*", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
 # FTDI serial devices: focusers, observing-condition sensors, and mounts.
 SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", MODE="0660", GROUP="plugdev", TAG+="uaccess"

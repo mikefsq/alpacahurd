@@ -3,6 +3,7 @@ package hurd
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -22,7 +23,13 @@ func launchArgv(cfg *Config, cfgPath, instance string) (exe string, args []strin
 		res := resolveDriver(spec)
 		switch res.kind {
 		case installedBinary:
-			return res.exe, res.args, nil
+			args := append([]string(nil), res.args...)
+			// The driver's setup pages link back to this setup page, on 32227 unless hurd.json
+			// moves it. The flag is passed only then, so drivers built before it existed start.
+			if p := cfg.setupPort(); p != discoveryPort {
+				args = append(args, "-hurd-port", strconv.Itoa(p))
+			}
+			return res.exe, args, nil
 		case compiledIn:
 			return "", nil, fmt.Errorf("device %q: driver %q is compiled into alpacahurd and runs inside it; there is no separate binary to launch", instance, spec.Driver)
 		}

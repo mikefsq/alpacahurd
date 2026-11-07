@@ -325,7 +325,7 @@ func TestManagementNavigationAndAddPage(t *testing.T) {
 		t.Fatal("main page still has embedded add form or per-row logs")
 	}
 	page = logGet(o, "/setup/add").Body.String()
-	for _, want := range []string{"<h1>Add a device</h1>", "Back to devices", `action="/setup/add"`, "sim-camera", "Create and configure"} {
+	for _, want := range []string{"<h1>Add a device</h1>", "Back to devices", `id="add-device-form"`, "sim-camera", "Find devices"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("add page missing %s", want)
 		}
@@ -337,7 +337,7 @@ func TestManagementNavigationAndAddPage(t *testing.T) {
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	o.ServeHTTP(w, r)
-	for _, want := range []string{"exists already", `value="cam"`, `value="sim-camera" selected`} {
+	for _, want := range []string{"device selection expired"} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Fatalf("failed add lost error or draft: %s", want)
 		}

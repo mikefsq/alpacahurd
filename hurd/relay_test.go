@@ -339,11 +339,11 @@ func TestEditDeviceFile(t *testing.T) {
 	if got, _ := os.ReadFile(devFile); !strings.Contains(string(got), `// "port": 11740`) {
 		t.Fatal("file changed by a refused save")
 	}
-	// A valid edit is written and the row re-read; enable then serves it on the new port.
+	// A valid edit enabling the device immediately serves it on the new port.
 	resp, _ = http.PostForm(ts.URL+"/setup/edit", url.Values{"instance": {"cam"}, "text": {"{\n\t\"driver\": \"sim-camera\", // fixed\n\t\"port\": 11741,\n\t\"name\": \"Edited\"\n}"}})
 	b, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if !strings.Contains(string(b), "saved "+devFile) || !strings.Contains(string(b), "enable the device") {
+	if !strings.Contains(string(b), "saved "+devFile) || !strings.Contains(string(b), "enabled: serving") {
 		t.Fatalf("save:\n%s", b)
 	}
 	if resp.Request.Method != http.MethodGet || resp.Request.URL.Path != "/setup" || strings.Contains(string(b), `id="config-editor"`) {
@@ -352,11 +352,8 @@ func TestEditDeviceFile(t *testing.T) {
 	if got, _ := os.ReadFile(devFile); !strings.Contains(string(got), `"port": 11741`) {
 		t.Fatalf("file after save: %s", got)
 	}
-	resp, _ = http.PostForm(ts.URL+"/setup", url.Values{"instance": {"cam"}, "action": {"enable"}})
-	b, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
 	if !strings.Contains(string(b), "cam enabled: serving as camera 0 on port 11741") {
-		t.Fatalf("enable after edit:\n%s", b)
+		t.Fatalf("save must start the device without another enable action:\n%s", b)
 	}
 	// Path traversal by instance is impossible: only known rows are editable.
 	resp, _ = http.PostForm(ts.URL+"/setup/edit", url.Values{"instance": {"../hurd"}, "text": {`{"driver":"x"}`}})

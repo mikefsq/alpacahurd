@@ -30,8 +30,19 @@ func TestRestartStandaloneAction(t *testing.T) {
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		w := httptest.NewRecorder()
 		o.ServeHTTP(w, r)
-		if !strings.Contains(w.Body.String(), "restart cam: done") {
-			t.Fatal(w.Body.String())
+		// The action answers with a redirect to a GET, which shows the result once.
+		if w.Code != http.StatusSeeOther {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		page := httptest.NewRecorder()
+		o.ServeHTTP(page, httptest.NewRequest(http.MethodGet, w.Header().Get("Location"), nil))
+		if !strings.Contains(page.Body.String(), "restart cam: done") {
+			t.Fatal(page.Body.String())
+		}
+		again := httptest.NewRecorder()
+		o.ServeHTTP(again, httptest.NewRequest(http.MethodGet, w.Header().Get("Location"), nil))
+		if strings.Contains(again.Body.String(), "restart cam: done") {
+			t.Fatal("reload showed the result again")
 		}
 	}
 	if len(sup.calls) != 2 {

@@ -2,6 +2,8 @@ package hurd
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,5 +112,99 @@ func TestDeviceEnableSupervisorFollowsConfig(t *testing.T) {
 	}
 	if o.rows[0].spec.enabled() {
 		t.Fatal("disabled row still enabled")
+	}
+}
+
+func TestEditorEnableChangesApplyToSupervisor(t *testing.T) {
+	o, path, _ := editorFixture(t)
+	exe := filepath.Join(t.TempDir(), "test-driver")
+	writeFile(t, exe, "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(exe, 0755); err != nil {
+		t.Fatal(err)
+	}
+	draft := `{"driver":"external-test","exec":"` + exe + `","enable":false}`
+	writeFile(t, path, draft)
+	spec, err := loadDeviceFile(path, stateDevicesDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.rows[0].spec = spec
+	o.rows[0].res = resolveDriver(spec)
+	sup := &enableOrderSupervisor{t: t, path: path, want: true}
+	o.sup = sup
+	enabled := strings.Replace(draft, `"enable":false`, `"enable":true`, 1)
+	w := editorPost(o, "/setup/edit", enabled)
+	if w.Code != http.StatusSeeOther {
+		t.Fatal(w.Body.String())
+	}
+	if got := strings.Join(sup.calls, ","); got != "install,enable,start" {
+		t.Fatal(got)
+	}
+	// Saving other fields with the same enabled state must not start it again.
+	w = editorPost(o, "/setup/edit", enabled)
+	if w.Code != http.StatusSeeOther {
+		t.Fatal(w.Body.String())
+	}
+	if len(sup.calls) != 3 {
+		t.Fatal(sup.calls)
+	}
+	sup.want = false
+	w = editorPost(o, "/setup/edit", draft)
+	if w.Code != http.StatusSeeOther {
+		t.Fatal(w.Body.String())
+	}
+	if got := strings.Join(sup.calls, ","); got != "install,enable,start,stop,disable" {
+		t.Fatal(got)
+	}
+}
+
+type failingStartSupervisor struct{ *enableOrderSupervisor }
+
+func (s failingStartSupervisor) Start(context.Context, string) error {
+	return fmt.Errorf("systemd start failed")
+}
+
+// The rollback switches the file off before stopping, so Stop and Disable expect it disabled.
+func (s failingStartSupervisor) Stop(ctx context.Context, inst string) error {
+	s.want = false
+	return s.enableOrderSupervisor.Stop(ctx, inst)
+}
+func (s failingStartSupervisor) Disable(ctx context.Context, inst string) error {
+	s.want = false
+	return s.enableOrderSupervisor.Disable(ctx, inst)
+}
+
+func TestEditorReportsEnableFailureAfterSaving(t *testing.T) {
+	o, path, _ := editorFixture(t)
+	exe := filepath.Join(t.TempDir(), "test-driver")
+	writeFile(t, exe, "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(exe, 0755); err != nil {
+		t.Fatal(err)
+	}
+	sup := &enableOrderSupervisor{t: t, path: path, want: true}
+	o.sup = failingStartSupervisor{sup}
+	draft := `{"driver":"external-test","exec":"` + exe + `","enable":true}`
+	writeFile(t, path, strings.Replace(draft, `"enable":true`, `"enable":false`, 1))
+	original, err := loadDeviceFile(path, stateDevicesDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.rows[0].spec = original
+	o.rows[0].res = resolveDriver(original)
+	w := editorPost(o, "/setup/edit", draft)
+	location := w.Header().Get("Location")
+	if w.Code != http.StatusSeeOther || !strings.Contains(location, "applyError=1") || !strings.Contains(location, "systemd+start+failed") {
+		t.Fatalf("service failure was hidden: %d %s", w.Code, location)
+	}
+	// A failed start leaves the file, the service and the page all disabled.
+	spec, err := loadDeviceFile(path, stateDevicesDir())
+	if err != nil || spec.enabled() || !strings.Contains(string(spec.Raw), "external-test") {
+		t.Fatalf("rollback did not disable the saved configuration: %+v %v", spec, err)
+	}
+	if got := strings.Join(sup.calls, ","); got != "install,enable,stop,disable" {
+		t.Fatal(got)
+	}
+	if o.cfg.Devices[0].enabled() {
+		t.Fatal("configuration left enabled after rollback")
 	}
 }

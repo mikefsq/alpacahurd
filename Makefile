@@ -12,7 +12,7 @@ else
 CGO ?= 0
 endif
 
-.PHONY: all help gen build fat deb tidy deps test install uninstall clean
+.PHONY: all help gen build fat deb tidy deps test install seed uninstall clean
 
 all: build ## Build the orchestrator with simulators
 
@@ -46,10 +46,19 @@ test: ## Run the Go test suite
 	go test ./...
 
 install: ## Install the built binary, service, and config
+	@sh build/check-fresh ./$(BIN) .
 ifeq ($(UNAME_S),Darwin)
 	./deploy/install-macos.sh ./$(BIN)
 else
 	./deploy/install.sh ./$(BIN)
+endif
+
+seed: ## Write disabled templates for the compiled-in drivers; keeps existing files
+	@sh build/check-fresh ./$(BIN) .
+ifeq ($(UNAME_S),Darwin)
+	./$(BIN) -example-devices "/Library/Application Support/alpacahurd/devices.d"
+else
+	./$(BIN) -example-devices /etc/alpacahurd/devices.d
 endif
 
 uninstall: ## Remove the service and binary; keep config

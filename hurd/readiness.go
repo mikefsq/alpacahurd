@@ -77,7 +77,9 @@ func (o *orchestrator) handleReadiness(w http.ResponseWriter, r *http.Request) {
 		if row.res.kind == installedBinary && (row.reg == nil || row.reg.Local) {
 			if _, none := sup.(noSupervisor); !none {
 				status, err := sup.Status(ctx, inst)
-				if err == nil && (status.LastError != "" || strings.HasPrefix(status.State, "failed")) {
+				// A running service's last error belongs to an earlier run; the probe below
+				// reports on this one.
+				if err == nil && !status.Running && (status.LastError != "" || strings.HasPrefix(status.State, "failed")) {
 					result = readinessLabel(true, "Error", "error", "Service failed: "+status.State+" "+status.LastError)
 				}
 			}

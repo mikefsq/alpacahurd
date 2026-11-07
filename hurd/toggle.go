@@ -253,3 +253,43 @@ func (o *orchestrator) startInProcess(row *orchRow) (string, error) {
 
 // enableTimeout bounds a page enable or disable, hardware open included.
 const enableTimeout = 30 * time.Second
+
+// enableOrRollback enables a device and, when starting it fails, switches it back off so the
+// file, the running state and the page agree. The rollback gets its own deadline because a
+// failed start may have used up ctx.
+func (o *orchestrator) enableOrRollback(ctx context.Context, inst string) (string, error) {
+	message, err := o.setEnabled(ctx, inst, true)
+	if err == nil {
+		o.resyncDevice(inst)
+		return message, nil
+	}
+	rctx, cancel := context.WithTimeout(context.Background(), enableTimeout)
+	defer cancel()
+	if _, rerr := o.setEnabled(rctx, inst, false); rerr != nil {
+		o.resyncDevice(inst)
+		return "", fmt.Errorf("%v; switching it back off also failed: %v", err, rerr)
+	}
+	o.resyncDevice(inst)
+	return "", fmt.Errorf("saved with the device disabled; starting it failed: %v", err)
+}
+
+// resyncDevice reloads an instance's file into o.cfg, which setEnabled leaves stale.
+func (o *orchestrator) resyncDevice(inst string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, row := range o.rows {
+		if row.spec.Instance != inst || row.spec.Source == "" {
+			continue
+		}
+		spec, err := loadDeviceFile(row.spec.Source, stateDevicesDir())
+		if err != nil {
+			return
+		}
+		for i := range o.cfg.Devices {
+			if o.cfg.Devices[i].Source == spec.Source {
+				o.cfg.Devices[i] = spec
+			}
+		}
+		return
+	}
+}

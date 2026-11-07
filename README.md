@@ -50,9 +50,10 @@ After building:
 sudo make install
 ```
 
-The installer seeds `hurd.json` and one disabled file in `devices.d/` per
-compiled-in hardware driver, preserving existing files. Edit the device
-files for your hardware, then restart the service:
+The installer seeds `hurd.json` and leaves `devices.d/` empty. Add devices on
+the setup page at `http://<host>:32227/setup`. `sudo make seed` writes one
+disabled file per compiled-in hardware driver instead, preserving existing
+files. After editing device files by hand, restart the service:
 
 ```sh
 # Linux
@@ -122,13 +123,11 @@ only their own path; device configuration files remain separate. For example:
 /usr/local/bin/astrocam
 ```
 
-The web Add device page combines this catalogue with compiled-in drivers, without
-requiring running devices or state files. It refreshes the catalogue on each
-visit. For a standalone driver, it invokes only `-schema commented`, creates a
-disabled configuration with the installed executable path, and opens the editor.
-Existing configuration and state are preserved; an instance name with existing
-state cannot be reused by Add device to avoid inheriting unrelated settings. Missing binaries or invalid registry entries are reported
-on the Add device page.
+The web Add device page combines this catalogue with compiled-in drivers and
+refreshes the catalogue on each visit. Selecting a driver reads its schema and
+runs `-discover`; installed drivers must support `-schema json`, `-schema commented`
+and `-discover`. Missing binaries, unsupported commands and scan errors are shown
+on the page. No hardware is scanned merely by listing the installed drivers.
 
 | Location | Linux | macOS | Windows |
 |---|---|---|---|
@@ -236,17 +235,36 @@ hardware function. Systemd state is shown on **Logs** when a device is selected,
 rather than in the device list. Logs opens in a new tab and offers a device
 selector, All devices, pause/resume, refresh, and follow-latest controls.
 
-**Add device** opens a separate page and creates a disabled configuration from
-the selected driver's template, then opens the editor. The editor checks JSONC
-syntax while typing. **Check configuration** validates the draft before Save is
-available; edits invalidate the previous check, and Save validates again before
-writing. Failed submissions preserve the draft. Disabled drafts may be saved
-with driver validation warnings; enabling requires a passing configuration.
-Successful saves return to the device list.
+**Add device** provides a form without JSON editing. Select a driver, then choose
+one of its detected devices. Devices already assigned to a configuration, including
+disabled entries, are labelled **Already configured** and link to that entry. Drivers
+without discovery show connection fields instead (for example a mount address).
+The form uses driver-provided field labels, help and options.
 
-The shared setup page uses TCP port 32227 by default. If it is occupied,
-alpacahurd selects another port and logs the address. Set `setupPort` in
-`hurd.json` to choose a different starting port, or `-1` to disable the page.
+Adding reuses the first disabled, unpinned prototype for that driver, preserving
+its settings and comments. For legacy Astrocam two-camera prototypes, the
+selected camera is pinned in the first block and the unused block is disabled.
+Otherwise it creates a filename with a unique instance
+ID. Hardware is pinned using the driver's preferred available identity, such as a
+serial number before an enumeration index. Drivers exposing no per-unit selector
+(such as the current PoleMaster driver) cannot be pinned to a physical unit; the
+form explicitly identifies that limitation. These hardware identities are separate
+from the configuration instance ID. An Alpaca port is chosen automatically, excluding configured ports
+and current listeners. Duplicate identities and prototype changes are checked again
+before writing. **Enable and start** optionally starts the saved device; otherwise
+it remains disabled. Discovery selections expire after ten minutes; use **Find
+devices** again to refresh them. Hardware must remain connected between selection
+and starting; discovering an identifier does not guarantee a successful connection.
+
+The existing **Edit** page remains an advanced JSONC editor. It checks syntax while
+typing, validates before saving, and preserves failed drafts. Changes to the enabled
+flag start or stop the device immediately; other edits to a running device require
+Restart. Successful saves return to the device list.
+
+The shared setup page uses TCP port 32227, the number of the Alpaca discovery
+port. Set `setupPort` in `hurd.json` to use another port, or `-1` to disable the
+page. If the port is occupied, alpacahurd stops with "port 32227 in use; another
+alpacahurd is probably running".
 
 Use Restart after editing a device file. For standalone drivers this restarts
 the service process. Built-in simulators are recreated internally, reopening
@@ -302,6 +320,6 @@ try a complete set without hardware:
 
 ## License
 
-alpacahurd is released under the [GNU General Public License, version 3](LICENSE)
-(SPDX: `GPL-3.0-only`). Dependencies and separately installed drivers retain
+alpacahurd is released under the [GNU Affero General Public License, version 3](LICENSE)
+(SPDX: `AGPL-3.0-only`). Dependencies and separately installed drivers retain
 their own licenses.

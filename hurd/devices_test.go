@@ -2,6 +2,7 @@ package hurd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -469,30 +470,41 @@ func TestOrchestratorPage(t *testing.T) {
 	if !strings.Contains(string(b), "no separate process to control") {
 		t.Errorf("no-op action banner:\n%s", b)
 	}
-	// Add writes a commented device file; a second add of the same name refuses.
-	resp, _ = http.PostForm(ts.URL+"/setup/add", url.Values{"driver": {"sim-camera"}, "instance": {"guide-cam"}})
-	b, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
-	added := filepath.Join(root, "devices.d", "guide-cam.json")
-	if !strings.Contains(string(b), "Created guide-cam") || resp.Request.Method != http.MethodGet || resp.Request.URL.Path != "/setup/edit" {
-		t.Fatalf("add:\n%s", b)
+	// Add works through a driver selection and a form, without a JSON editor.
+	resp, err = http.PostForm(ts.URL+"/setup/add/options", url.Values{"driver": {"sim-camera"}})
+	if err != nil {
+		t.Fatal(err)
 	}
+	var draft addDraft
+	if err := json.NewDecoder(resp.Body).Decode(&draft); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	resp, err = http.PostForm(ts.URL+"/setup/add", url.Values{"token": {draft.Token}, "name": {"Guide camera"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]string
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	resp.Body.Close()
+	location, err := url.Parse(result["location"])
+	if err != nil || location.Path != "/setup" {
+		t.Fatalf("add: %v %v", result, err)
+	}
+	inst := location.Query().Get("saved")
+	added := filepath.Join(root, "devices.d", inst+".json")
 	m, err := devicemain.ReadDeviceFile(added)
-	if err != nil || string(m["driver"]) != `"sim-camera"` || m["port"] != nil {
-		t.Errorf("added file: %v %v", m, err)
+	if err != nil || string(m["driver"]) != `"sim-camera"` || m["port"] == nil || string(m["enable"]) != "false" {
+		t.Fatalf("added file: %v %v", m, err)
 	}
-	resp, _ = http.PostForm(ts.URL+"/setup/add", url.Values{"driver": {"sim-camera"}, "instance": {"guide-cam"}})
+	// Replaying the completed selection cannot create another record.
+	resp, _ = http.PostForm(ts.URL+"/setup/add", url.Values{"token": {draft.Token}})
 	b, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if !strings.Contains(string(b), "exists already") {
-		t.Errorf("duplicate add should refuse:\n%s", b)
+	if !strings.Contains(string(b), "selection expired") {
+		t.Fatalf("duplicate submission accepted: %s", b)
 	}
-	resp, _ = http.PostForm(ts.URL+"/setup/add", url.Values{"driver": {"sim-camera"}, "instance": {"../evil"}})
-	b, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if !strings.Contains(string(b), "plain filename stem") {
-		t.Errorf("path-traversal instance should refuse:\n%s", b)
-	}
+
 }
 
 func TestManyScannedPortsDoNotCollide(t *testing.T) {

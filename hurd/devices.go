@@ -1,7 +1,6 @@
 package hurd
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -117,49 +116,11 @@ func deviceEnableText(text string, on bool) (string, error) {
 	if !json.Valid(clean) {
 		return "", fmt.Errorf("invalid device JSON")
 	}
-	dec := json.NewDecoder(bytes.NewReader(clean))
-	token, err := dec.Token()
-	if err != nil || token != json.Delim('{') {
-		return "", fmt.Errorf("device configuration must be an object")
-	}
-	type span struct{ start, end int }
-	var spans []span
-	keys := 0
-	for dec.More() {
-		keys++
-		key, err := dec.Token()
-		if err != nil {
-			return "", err
-		}
-		start := int(dec.InputOffset())
-		for start < len(clean) && (clean[start] == ':' || bytes.ContainsRune([]byte(" \t\r\n"), rune(clean[start]))) {
-			start++
-		}
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
-			return "", err
-		}
-		if strings.EqualFold(key.(string), "enable") {
-			spans = append(spans, span{start, int(dec.InputOffset())})
-		}
-	}
-	value := "false"
+	value := json.RawMessage("false")
 	if on {
-		value = "true"
+		value = json.RawMessage("true")
 	}
-	for i := len(spans) - 1; i >= 0; i-- {
-		r := spans[i]
-		text = text[:r.start] + value + text[r.end:]
-	}
-	if len(spans) == 0 {
-		start := bytes.IndexByte(clean, '{') + 1
-		comma := ""
-		if keys > 0 {
-			comma = ","
-		}
-		text = text[:start] + "\n  \"enable\": " + value + comma + text[start:]
-	}
-	return text, nil
+	return patchDeviceText(text, map[string]json.RawMessage{"enable": value})
 }
 
 func writeDeviceEnable(path string, on bool) error {

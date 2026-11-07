@@ -210,7 +210,8 @@ func parseLaunchctlPrint(out string) (state string, pid int, lastExit string) {
 	if m := launchdPIDRe.FindStringSubmatch(out); m != nil {
 		pid, _ = strconv.Atoi(m[1])
 	}
-	if m := launchdExitRe.FindStringSubmatch(out); m != nil {
+	// A job that never exited reports "(never exited)", which is no exit status.
+	if m := launchdExitRe.FindStringSubmatch(out); m != nil && !strings.HasPrefix(m[1], "(") {
 		lastExit = m[1]
 	}
 	if state == "" {
