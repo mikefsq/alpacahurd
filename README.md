@@ -235,6 +235,14 @@ hardware function. Systemd state is shown on **Logs** when a device is selected,
 rather than in the device list. Logs opens in a new tab and offers a device
 selector, All devices, pause/resume, refresh, and follow-latest controls.
 
+**Enable all** and **Disable all** apply once per device configuration, regardless
+of the list filter. Inline and unmanaged entries are skipped, and failures are
+reported while the remaining devices continue. A failed enable is rolled back to
+disabled; the in-memory configuration is synchronized after each operation.
+
+Setup and Logs include a link to `http://<hostname>.local/`, for hosts with a
+landing page on port 80.
+
 **Add device** provides a form without JSON editing. Select a driver, then choose
 one of its detected devices. Devices already assigned to a configuration, including
 disabled entries, are labelled **Already configured** and link to that entry. Drivers

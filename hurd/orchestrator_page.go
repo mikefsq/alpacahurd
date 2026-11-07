@@ -306,6 +306,15 @@ func (o *orchestrator) handleAction(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	var err error
 	switch action {
+	case "enable-all", "disable-all":
+		message, bulkErr := o.setAllEnabled(r.Context(), action == "enable-all")
+		kind := "ok"
+		if bulkErr != nil {
+			message += "; " + bulkErr.Error()
+			kind = "error"
+		}
+		redirectWithBanner(w, r, message, kind)
+		return
 	case "delete":
 		err = o.deleteDevice(ctx, inst)
 		if err == nil {
@@ -526,6 +535,8 @@ type pageRow struct {
 }
 
 type pageView struct {
+	Home       string
+	HomeLabel  string
 	CSS        template.CSS
 	ConfigDir  string
 	StateDir   string
@@ -554,7 +565,10 @@ type pageView struct {
 func (o *orchestrator) render(w http.ResponseWriter, r *http.Request, banner, kind string) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
+	home, homeLabel := hostHome()
 	view := pageView{
+		Home:        home,
+		HomeLabel:   homeLabel,
 		ConfigDir:   filepath.Dir(o.cfgPath),
 		StateDir:    stateDirRoot(),
 		Supervisor:  o.sup.Name(),
@@ -797,6 +811,7 @@ td code{display:block;max-width:22rem;margin-top:.25rem;overflow-wrap:anywhere}
 .editor-buttons{display:flex;flex-wrap:wrap;gap:.75rem}
 td.num{text-align:right}
 .page-actions form.inline{margin:0}
+.page-actions form.bulk-actions{display:flex;gap:.5rem;flex-wrap:wrap;margin:0;padding:0;border:0;background:transparent;box-shadow:none}
 form.inline{display:inline-flex;flex-wrap:wrap;gap:.4rem;margin:.35rem .4rem .35rem 0;vertical-align:top}
 button.small{font-size:.8rem;padding:.5rem .7rem}
 .page-actions button.nav-link{background:none;border:0;border-radius:0;padding:0;min-height:2.75rem;color:var(--accent);font:inherit;text-decoration:underline;text-underline-offset:.2em;box-shadow:none}
@@ -875,7 +890,7 @@ button[value=stop]:hover,button[value=disable]:hover{background:#443039;border-c
 </style></head>
 <body{{if or .EditPage .AddPage}} class="editor-page"{{end}}>
 {{if .EditPage}}
-<nav aria-label="Back"><a href="/setup">← Back to devices</a></nav>
+<nav aria-label="Back">{{with .Home}}<a href="{{.}}">↑ {{$.HomeLabel}}</a> {{end}}<a href="/setup">← Back to devices</a></nav>
 <h1>{{if .EditInstance}}Edit {{.EditInstance}}{{else}}Edit configuration{{end}}</h1>
 <p class="sub">Check your changes, then save to return to the device list.</p>
 {{with .Banner}}<div class="banner {{$.BannerKind}}" role="alert">{{.}}</div>{{end}}
@@ -896,7 +911,7 @@ button[value=stop]:hover,button[value=disable]:hover{background:#443039;border-c
 <script>{{.EditorJS}}</script>
 {{end}}
 {{else if .AddPage}}
-<nav aria-label="Back"><a href="/setup">← Back to devices</a></nav>
+<nav aria-label="Back">{{with .Home}}<a href="{{.}}">↑ {{$.HomeLabel}}</a> {{end}}<a href="/setup">← Back to devices</a></nav>
 <h1>Add a device</h1>
 <p class="sub">Choose a driver, find your device, then add it. An unused prototype is configured first.</p>
 {{with .Banner}}<div class="banner {{$.BannerKind}}" role="alert">{{.}}</div>{{end}}
@@ -920,11 +935,16 @@ button[value=stop]:hover,button[value=disable]:hover{background:#443039;border-c
 {{else}}
 <h1>alpacahurd</h1>
 <nav class="page-actions" aria-label="Management">
+{{with .Home}}<a href="{{.}}">↑ {{$.HomeLabel}}</a> {{end}}
 <a href="/setup/logs" target="_blank" rel="noopener">Logs ↗</a>
 <a href="/setup/check">Check configuration</a>
 <a href="/setup/add">Add device</a>
 <button type="button" id="refresh-readiness" class="nav-link">Refresh status</button>
 <form class="inline" method="post" action="/setup"><button class="nav-link" name="action" value="restart-hurd" title="Restart alpacahurd: reread every device file and reopen every device">Restart alpacahurd</button></form>
+<form method="post" action="/setup" class="inline bulk-actions" aria-label="All configured devices">
+<button type="submit" name="action" value="enable-all" {{if not .Rows}}disabled{{end}}>Enable all</button>
+<button type="submit" name="action" value="disable-all" {{if not .Rows}}disabled{{end}}>Disable all</button>
+</form>
 </nav>
 <p class="sub">{{.Version}} · listening on port {{.Port}} · up {{.Uptime}}<br>config <code>{{.ConfigDir}}</code><br>state <code>{{.StateDir}}</code><br>supervisor {{.Supervisor}}</p>
 {{with .Banner}}<div class="banner {{$.BannerKind}}">{{.}}</div>{{end}}

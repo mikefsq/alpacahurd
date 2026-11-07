@@ -293,3 +293,59 @@ func (o *orchestrator) resyncDevice(inst string) {
 		return
 	}
 }
+
+// setAllEnabled acts once per configuration, including grouped cameras, regardless
+// of the browser's state filter. One failure does not prevent other devices changing.
+func (o *orchestrator) setAllEnabled(ctx context.Context, on bool) (string, error) {
+	o.mu.RLock()
+	var instances []string
+	seen := map[string]bool{}
+	skipped := 0
+	for _, row := range o.rows {
+		inst := row.spec.Instance
+		if seen[inst] {
+			continue
+		}
+		seen[inst] = true
+		if inst == "" || inst == "(inline)" || row.spec.Source == "" {
+			skipped++
+			continue
+		}
+		instances = append(instances, inst)
+	}
+	o.mu.RUnlock()
+	count := 0
+	var failures []string
+	for _, inst := range instances {
+		if err := ctx.Err(); err != nil {
+			failures = append(failures, err.Error())
+			break
+		}
+		deviceCtx, cancel := context.WithTimeout(ctx, enableTimeout)
+		var err error
+		if on {
+			_, err = o.enableOrRollback(deviceCtx, inst)
+		} else {
+			_, err = o.setEnabled(deviceCtx, inst, false)
+			o.resyncDevice(inst)
+		}
+		cancel()
+		if err != nil {
+			failures = append(failures, inst+": "+err.Error())
+		} else {
+			count++
+		}
+	}
+	state := "disabled"
+	if on {
+		state = "enabled"
+	}
+	message := fmt.Sprintf("%d device configurations %s", count, state)
+	if skipped > 0 {
+		message += fmt.Sprintf("; %d inline or unmanaged entries skipped", skipped)
+	}
+	if len(failures) > 0 {
+		return message, fmt.Errorf("%s", strings.Join(failures, "; "))
+	}
+	return message, nil
+}

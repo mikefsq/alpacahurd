@@ -139,9 +139,11 @@ func (o *orchestrator) handleLogs(w http.ResponseWriter, r *http.Request) {
 	view := struct {
 		CSS                                       template.CSS
 		Script                                    template.JS
+		Home, HomeLabel                           string
 		Instance, Supervisor, Error, Title, Scope string
 		Instances                                 []string
 	}{CSS: template.CSS(alpacadev.DefaultSetupTemplates().CSS), Script: template.JS(logScript), Instance: instance, Supervisor: o.sup.Name(), Instances: o.logInstances(), Title: instance, Scope: "This instance only · Latest 200 lines"}
+	view.Home, view.HomeLabel = hostHome()
 	if instance == "" {
 		view.Title = "All devices"
 		view.Scope = "All local device instances · Latest 200 lines per instance, grouped by instance"
@@ -169,7 +171,7 @@ body{max-width:90rem}nav{margin-bottom:1.25rem}
 #log-status{min-height:1.6em}.log-error{color:#efb9b6}
 @media(max-width:700px){body{padding:1.25rem 1rem calc(2rem + env(safe-area-inset-bottom))}input,select,textarea{font-size:16px!important}#log-filter{flex-wrap:wrap}#log-instance{width:100%;min-width:0}.log-controls{gap:.5rem}#log-output{height:55vh;min-height:12rem;font-size:.8rem}button{min-height:44px}}
 </style></head><body>
-<nav aria-label="Back"><a href="/setup">← Devices</a></nav>
+<nav aria-label="Back">{{with .Home}}<a href="{{.}}">↑ {{$.HomeLabel}}</a> {{end}}<a href="/setup">← Devices</a></nav>
 <h1>Logs: {{.Title}}</h1>
 <form id="log-filter" method="get" action="/setup/logs">
 <label for="log-instance">Device instance</label>
