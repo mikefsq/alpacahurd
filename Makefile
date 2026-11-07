@@ -45,8 +45,7 @@ tidy: ## Regenerate imports and tidy the recorded module dependencies
 test: ## Run the Go test suite
 	go test ./...
 
-install: ## Install the built binary, service, and config
-	@sh build/check-fresh ./$(BIN) .
+install: build ## Build the standard binary and install it, the service, and config
 ifeq ($(UNAME_S),Darwin)
 	./deploy/install-macos.sh ./$(BIN)
 else
@@ -54,7 +53,6 @@ else
 endif
 
 seed: ## Write disabled templates for the compiled-in drivers; keeps existing files
-	@sh build/check-fresh ./$(BIN) .
 ifeq ($(UNAME_S),Darwin)
 	./$(BIN) -example-devices "/Library/Application Support/alpacahurd/devices.d"
 else

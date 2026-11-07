@@ -6,6 +6,8 @@
 #
 # Defaults to ./alpacahurd. Build one first: `make fat` for the compiled-in
 # layout, `make` for the bare orchestrator over separate driver binaries.
+# `sudo make install` always builds the standard binary; install a fat build
+# by calling this script directly.
 set -euo pipefail
 
 BIN_SRC="${1:-./alpacahurd}"

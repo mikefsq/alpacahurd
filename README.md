@@ -44,11 +44,15 @@ For driver development and integration, see [DRIVERS.md](DRIVERS.md).
 
 ### Linux and macOS service
 
-After building:
+Build and install the standard binary:
 
 ```sh
 sudo make install
 ```
+
+This always runs the standard build first. To install a bundled `make fat`
+build, run `sudo ./deploy/install.sh ./alpacahurd` on Linux or
+`sudo ./deploy/install-macos.sh ./alpacahurd` on macOS instead.
 
 The installer seeds `hurd.json` and leaves `devices.d/` empty. Add devices on
 the setup page at `http://<host>:32227/setup`. `sudo make seed` writes one
