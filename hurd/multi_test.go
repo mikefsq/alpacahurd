@@ -78,3 +78,70 @@ func TestCheckConfigMultiDeviceEntry(t *testing.T) {
 		}
 	}
 }
+
+// extra-widget is a test driver with an Extra kind: a sim focuser that is also a
+// sim switch, one switch per "switches" block, one by default.
+func init() {
+	foc, _ := registry.Lookup("sim-focuser")
+	sw, ok := registry.Lookup("sim-switch")
+	if !ok {
+		panic("sim-switch is not registered")
+	}
+	registry.Register(registry.Driver{
+		Name:          "extra-widget",
+		Type:          foc.Type,
+		Description:   "test driver with an Extra kind",
+		ConfigExample: `{ "driver": "extra-widget" }`,
+		Config:        foc.Config,
+		New:           foc.New,
+		Extra:         []registry.Kind{{Type: sw.Type, MultiKey: "switches", New: sw.New, Config: sw.Config, Default: true}},
+	})
+}
+
+func TestSubSpecsExtraKind(t *testing.T) {
+	// No array: the primary flat, plus the Default extra kind's one block.
+	subs, err := subSpecs(parseSpec(t, `{"driver":"extra-widget","port":11201}`))
+	if err != nil || len(subs) != 2 {
+		t.Fatalf("subs = %v, %v; want primary plus one switch", subs, err)
+	}
+	if subs[0].Extra != "" || subs[0].Block != nil {
+		t.Errorf("primary should stay flat: extra %q block %v", subs[0].Extra, subs[0].Block)
+	}
+	if subs[1].Extra != "switch" || *subs[1].Device != 0 || *subs[1].Block != 0 || !subs[1].enabled() {
+		t.Errorf("default switch block: extra %q device %d block %d", subs[1].Extra, *subs[1].Device, *subs[1].Block)
+	}
+
+	// An array: one switch per block, pinned to its position, own name and enable.
+	subs, err = subSpecs(parseSpec(t, `{"driver":"extra-widget","port":11201,"switches":[{"name":"s"},{"enable":false}]}`))
+	if err != nil || len(subs) != 3 {
+		t.Fatalf("subs = %v, %v; want primary plus two switches", subs, err)
+	}
+	if subs[1].Name != "s" || *subs[1].Device != 0 || !subs[1].enabled() {
+		t.Errorf("switch 0: name %q device %d", subs[1].Name, *subs[1].Device)
+	}
+	if subs[2].enabled() || *subs[2].Device != 1 {
+		t.Errorf("switch 1 should be disabled device 1")
+	}
+
+	// An entry without Extra kinds expands as before.
+	plain, err := subSpecs(parseSpec(t, `{"driver":"sim-focuser","port":11201}`))
+	if err != nil || len(plain) != 1 || plain[0].Block != nil || plain[0].Extra != "" {
+		t.Fatalf("plain entry should stay one flat spec: %v %v", plain, err)
+	}
+}
+
+func TestCheckConfigExtraKind(t *testing.T) {
+	cfg := &Config{Devices: []DeviceSpec{
+		parseSpec(t, `{"driver":"extra-widget","port":11201,"switches":[{},{"enable":false},{}]}`),
+	}}
+	var out bytes.Buffer
+	fatal, errs := checkConfig(&out, cfg)
+	if fatal != 0 || errs != 0 {
+		t.Fatalf("fatal, errs = %d, %d, want 0, 0:\n%s", fatal, errs, out.String())
+	}
+	for _, needle := range []string{"focuser/0 on port 11201", "switch/0 on port 11201", "switch device 1 disabled", "switch/2 on port 11201"} {
+		if !strings.Contains(out.String(), needle) {
+			t.Errorf("checkConfig output missing %q:\n%s", needle, out.String())
+		}
+	}
+}

@@ -72,6 +72,10 @@ type DeviceSpec struct {
 	// Block is the array position and device number in a multi-device entry.
 	// Nil denotes a flat entry.
 	Block *int `json:"-"`
+
+	// Extra is the type of the driver's Extra kind (registry.Kind) this block serves.
+	// Empty denotes the primary kind.
+	Extra alpacadev.DeviceType `json:"-"`
 }
 
 // deviceCommon are the engine-owned keys of a device entry (registry.CommonKeys).

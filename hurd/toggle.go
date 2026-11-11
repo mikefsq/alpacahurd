@@ -230,25 +230,26 @@ func (o *orchestrator) startInProcess(row *orchRow) (string, error) {
 		}
 	}
 	nums := o.nums[key]
-	num, err := nums.assign(spec, drv.Type)
+	typ := kindOf(drv, spec).Type
+	num, err := nums.assign(spec, typ)
 	if err != nil {
 		return "", err
 	}
-	if err := srv.Register(drv.Type, num, dev); err != nil {
-		nums.release(drv.Type, num)
+	if err := srv.Register(typ, num, dev); err != nil {
+		nums.release(typ, num)
 		return "", err
 	}
 	if err := attachSetupForm(srv, drv, dev, num, spec); err != nil {
 		return "", err
 	}
-	_ = srv.SetReloader(drv.Type, num, reloaderFor(spec))
+	_ = srv.SetReloader(typ, num, reloaderFor(spec))
 	row.reloadable = true
 	row.stopFrontEnd = wireFrontEnd(o.ctx, drv, srv, num, spec, o.listenAddrs)
 	row.inProcess, row.num, row.port, row.srvKey = true, num, srv.Port(), key
-	row.deviceName, row.devType = dev.Name(), drv.Type
+	row.deviceName, row.devType = dev.Name(), typ
 	persistBoundPorts([]boundEntry{{spec: spec, port: srv.Port()}})
-	log.Printf("alpacahurd: %s enabled from the page; %s %d on :%d", spec.Instance, drv.Type, num, srv.Port())
-	return fmt.Sprintf("%s enabled: serving as %s %d on port %d", spec.Instance, drv.Type, num, srv.Port()), nil
+	log.Printf("alpacahurd: %s enabled from the page; %s %d on :%d", spec.Instance, typ, num, srv.Port())
+	return fmt.Sprintf("%s enabled: serving as %s %d on port %d", spec.Instance, typ, num, srv.Port()), nil
 }
 
 // enableTimeout bounds a page enable or disable, hardware open included.

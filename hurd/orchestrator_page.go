@@ -223,7 +223,7 @@ func textBetween(s, from, to string) string {
 // deviceTypeOf is the ASCOM type the device registered as.
 func deviceTypeOf(spec DeviceSpec, dev alpacadev.Device) alpacadev.DeviceType {
 	if drv, ok := registry.Lookup(spec.Driver); ok {
-		return drv.Type
+		return kindOf(drv, spec).Type
 	}
 	return ""
 }
@@ -502,7 +502,7 @@ func devicePageRow(row orchRow) pageRow {
 	}
 	if pr.Type == "" {
 		if drv, ok := registry.Lookup(row.spec.Driver); ok {
-			pr.Type = string(drv.Type)
+			pr.Type = string(kindOf(drv, row.spec).Type)
 		}
 	}
 	pr.Type = displayValue(pr.Type, "Unknown")

@@ -175,7 +175,7 @@ func serve(cfg *Config, cfgPath string) {
 		}
 		for _, sub := range subs {
 			if !sub.enabled() {
-				log.Printf("alpacahurd: skipping %s device %d (disabled)", spec.Instance, *sub.Block)
+				log.Printf("alpacahurd: skipping %s %sdevice %d (disabled)", spec.Instance, extraLabel(sub), *sub.Block)
 				continue
 			}
 			dev, num, err := registerDevice(srv, sub, nums[key])

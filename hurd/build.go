@@ -13,11 +13,35 @@ import (
 	alpacadev "github.com/mikefsq/goalpaca/server"
 )
 
-// subSpecs expands MultiKey blocks using their positions as device numbers.
+// subSpecs expands MultiKey blocks using their positions as device numbers, then
+// appends the blocks of the driver's Extra kinds, each pinned to its block position.
 // Flat entries remain unchanged; an empty multi-device entry defaults to two blocks.
 func subSpecs(spec DeviceSpec) ([]DeviceSpec, error) {
 	drv, ok := registry.Lookup(spec.Driver)
-	if !ok || drv.MultiKey == "" {
+	if !ok {
+		return []DeviceSpec{spec}, nil
+	}
+	subs, err := primarySubs(drv, spec)
+	if err != nil {
+		return nil, err
+	}
+	for _, k := range drv.Extra {
+		blocks, err := registry.ExtraBlocks(drv, k, spec.Raw)
+		if err != nil {
+			return nil, err
+		}
+		for _, b := range blocks {
+			sub := blockSpec(spec, b.Raw, b.Name, b.Index, b.Enable)
+			sub.Extra = k.Type
+			subs = append(subs, sub)
+		}
+	}
+	return subs, nil
+}
+
+// primarySubs expands the primary kind's MultiKey blocks.
+func primarySubs(drv registry.Driver, spec DeviceSpec) ([]DeviceSpec, error) {
+	if drv.MultiKey == "" {
 		return []DeviceSpec{spec}, nil
 	}
 	var m map[string]json.RawMessage
@@ -28,8 +52,19 @@ func subSpecs(spec DeviceSpec) ([]DeviceSpec, error) {
 		if err := json.Unmarshal(blocksRaw, &raws); err != nil {
 			return nil, fmt.Errorf("%q: %w", drv.MultiKey, err)
 		}
-	} else if len(pinnedKeys(spec.Raw)) > 0 {
-		return []DeviceSpec{spec}, nil
+	} else {
+		// Extra kinds' arrays do not make the entry flat.
+		keys := pinnedKeys(spec.Raw)
+		for _, k := range drv.Extra {
+			for key := range keys {
+				if strings.EqualFold(key, k.MultiKey) {
+					delete(keys, key)
+				}
+			}
+		}
+		if len(keys) > 0 {
+			return []DeviceSpec{spec}, nil
+		}
 	}
 	if len(raws) == 0 {
 		raws = []json.RawMessage{json.RawMessage("{}"), json.RawMessage("{}")}
@@ -43,27 +78,45 @@ func subSpecs(spec DeviceSpec) ([]DeviceSpec, error) {
 		if err := json.Unmarshal(r, &b); err != nil {
 			return nil, fmt.Errorf("%s[%d]: %w", drv.MultiKey, i, err)
 		}
-		sub := spec
-		sub.Raw = append(json.RawMessage(nil), r...)
-		sub.Name = b.Name
-		num, block := i, i
-		sub.Device, sub.Block = &num, &block
-		sub.Enable = nil
-		if !spec.enabled() || (b.Enable != nil && !*b.Enable) {
-			off := false
-			sub.Enable = &off
-		}
-		// Recompute pinned fields from this block in setupFormFor.
-		sub.Pinned = nil
-		subs = append(subs, sub)
+		subs = append(subs, blockSpec(spec, append(json.RawMessage(nil), r...), b.Name, i, b.Enable))
 	}
 	return subs, nil
+}
+
+// blockSpec is spec narrowed to one block at index, numbered by it.
+func blockSpec(spec DeviceSpec, raw json.RawMessage, name string, index int, enable *bool) DeviceSpec {
+	sub := spec
+	sub.Raw = raw
+	sub.Name = name
+	num, block := index, index
+	sub.Device, sub.Block = &num, &block
+	sub.Enable = nil
+	if !spec.enabled() || (enable != nil && !*enable) {
+		off := false
+		sub.Enable = &off
+	}
+	// Recompute pinned fields from this block in setupFormFor.
+	sub.Pinned = nil
+	return sub
+}
+
+// kindOf returns the kind spec serves: the Extra kind it names, else the primary.
+func kindOf(drv registry.Driver, spec DeviceSpec) registry.Kind {
+	if spec.Extra != "" {
+		for _, k := range drv.Extra {
+			if k.Type == spec.Extra {
+				return k
+			}
+		}
+	}
+	return drv.Kinds()[0]
 }
 
 // wireFrontEnd starts the optional driver front-end and returns its cancel function.
 // The device getter follows registration changes during reload.
 func wireFrontEnd(ctx context.Context, drv registry.Driver, srv *alpacadev.Server, num int, spec DeviceSpec, hosts []string) context.CancelFunc {
-	if drv.FrontEnd == nil {
+	// The front-end drives the primary device only.
+	if drv.FrontEnd == nil || spec.Extra != "" {
 		return func() {}
 	}
 	fctx, stop := context.WithCancel(ctx)
@@ -93,7 +146,7 @@ func buildDevice(spec DeviceSpec) (registry.Driver, alpacadev.Device, error) {
 	if spec.Device != nil {
 		devNum = *spec.Device
 	}
-	dev, err := drv.New(registry.Spec{Driver: drv.Name, Name: spec.Name, Instance: spec.Instance, Raw: spec.Raw, Device: devNum})
+	dev, err := kindOf(drv, spec).New(registry.Spec{Driver: drv.Name, Name: spec.Name, Instance: spec.Instance, Raw: spec.Raw, Device: devNum})
 	if err != nil {
 		return registry.Driver{}, nil, err
 	}
@@ -148,11 +201,12 @@ func registerDevice(srv *alpacadev.Server, spec DeviceSpec, nums *deviceNumbers)
 	if err != nil {
 		return nil, 0, err
 	}
-	num, err := nums.assign(spec, drv.Type)
+	typ := kindOf(drv, spec).Type
+	num, err := nums.assign(spec, typ)
 	if err != nil {
 		return nil, 0, err
 	}
-	if err := srv.Register(drv.Type, num, dev); err != nil {
+	if err := srv.Register(typ, num, dev); err != nil {
 		return nil, 0, err
 	}
 	if err := attachSetupForm(srv, drv, dev, num, spec); err != nil {
@@ -171,22 +225,24 @@ func attachSetupForm(srv *alpacadev.Server, drv registry.Driver, dev alpacadev.D
 		return nil
 	}
 	// Set the path before RegisterConfigurable loads persisted settings.
-	// Multi-device blocks after the first use a position suffix.
+	// Extra kinds add a type suffix; blocks after the first a position suffix.
+	k := kindOf(drv, spec)
 	if spec.Instance != "" {
-		stem := spec.Instance
+		stem := spec.Instance + drv.StateSuffix(k)
 		if spec.Block != nil && *spec.Block > 0 {
 			stem += "." + strconv.Itoa(*spec.Block)
 		}
-		if err := srv.SettingsPath(drv.Type, num, filepath.Join(stateDevicesDir(), stem+".json")); err != nil {
+		if err := srv.SettingsPath(k.Type, num, filepath.Join(stateDevicesDir(), stem+".json")); err != nil {
 			return err
 		}
 	}
-	return srv.RegisterConfigurable(drv.Type, num, sc)
+	return srv.RegisterConfigurable(k.Type, num, sc)
 }
 
 // setupFormFor builds a generated form, or returns nil if none is needed.
 func setupFormFor(drv registry.Driver, dev alpacadev.Device, spec DeviceSpec) (alpacadev.Configurable, error) {
-	if drv.Config == nil {
+	newCfg := kindOf(drv, spec).Config
+	if newCfg == nil {
 		return nil, nil
 	}
 	if _, own := dev.(alpacadev.Configurable); own {
@@ -200,7 +256,7 @@ func setupFormFor(drv registry.Driver, dev alpacadev.Device, spec DeviceSpec) (a
 	if spec.Source != "" {
 		source = "set in " + spec.Source
 	}
-	sc, err := alpacadev.NewStructConfig(dev, drv.Config, spec.Raw, pinned, source)
+	sc, err := alpacadev.NewStructConfig(dev, newCfg, spec.Raw, pinned, source)
 	if err != nil {
 		return nil, fmt.Errorf("setup form for %s: %w", spec.Driver, err)
 	}
@@ -223,10 +279,16 @@ func reloaderFor(spec DeviceSpec) alpacadev.Reloader {
 				if err != nil {
 					return nil, nil, err
 				}
-				if *spec.Block >= len(subs) || subs[*spec.Block].Block == nil {
-					return nil, nil, fmt.Errorf("%s no longer has block %d; restart alpacahurd to remove the device", spec.Source, *spec.Block)
+				found := false
+				for _, s := range subs {
+					if s.Extra == spec.Extra && s.Block != nil && *s.Block == *spec.Block {
+						cur, found = s, true
+						break
+					}
 				}
-				cur = subs[*spec.Block]
+				if !found {
+					return nil, nil, fmt.Errorf("%s no longer has %sblock %d; restart alpacahurd to remove the device", spec.Source, extraLabel(spec), *spec.Block)
+				}
 			}
 		}
 		if !strings.EqualFold(cur.Driver, spec.Driver) {
@@ -245,6 +307,14 @@ func reloaderFor(spec DeviceSpec) alpacadev.Reloader {
 		}
 		return dev, sc, nil
 	}
+}
+
+// extraLabel is "<type> " for an Extra-kind spec, "" for the primary.
+func extraLabel(spec DeviceSpec) string {
+	if spec.Extra == "" {
+		return ""
+	}
+	return string(spec.Extra) + " "
 }
 
 // pinnedKeys returns the driver-owned keys present in a config entry.

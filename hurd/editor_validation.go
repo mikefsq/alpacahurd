@@ -75,7 +75,7 @@ func validateDeviceEdit(ctx context.Context, original DeviceSpec, text string) (
 			if err != nil {
 				return driverCheckResult(spec, err)
 			}
-			if _, err := nums.assign(sub, drv.Type); err != nil {
+			if _, err := nums.assign(sub, kindOf(drv, sub).Type); err != nil {
 				return DeviceSpec{}, "", err
 			}
 		}

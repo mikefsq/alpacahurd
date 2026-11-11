@@ -144,7 +144,7 @@ func checkConfig(w io.Writer, cfg *Config) (fatal, errs int) {
 		}
 		for _, sub := range subs {
 			if !sub.enabled() {
-				fmt.Fprintf(w, "skip   %-22s device %d disabled\n", sub.Driver, *sub.Block)
+				fmt.Fprintf(w, "skip   %-22s %sdevice %d disabled\n", sub.Driver, extraLabel(sub), *sub.Block)
 				continue
 			}
 			drv, dev, err := buildDevice(sub)
@@ -155,16 +155,17 @@ func checkConfig(w io.Writer, cfg *Config) (fatal, errs int) {
 			if nums[sub.Port] == nil {
 				nums[sub.Port] = &deviceNumbers{}
 			}
-			num, err := nums[sub.Port].assign(sub, drv.Type)
+			typ := kindOf(drv, sub).Type
+			num, err := nums[sub.Port].assign(sub, typ)
 			if err != nil {
 				fail(sub, "%v", err)
 				continue
 			}
 
 			if sub.Port == 0 {
-				fmt.Fprintf(w, "ok     %-22s %s/%d on a scanned port (from %d; recorded in the state file at first start)  %q\n", sub.Driver, drv.Type, num, portScanBase, dev.Name())
+				fmt.Fprintf(w, "ok     %-22s %s/%d on a scanned port (from %d; recorded in the state file at first start)  %q\n", sub.Driver, typ, num, portScanBase, dev.Name())
 			} else {
-				fmt.Fprintf(w, "ok     %-22s %s/%d on port %d  %q\n", sub.Driver, drv.Type, num, sub.Port, dev.Name())
+				fmt.Fprintf(w, "ok     %-22s %s/%d on port %d  %q\n", sub.Driver, typ, num, sub.Port, dev.Name())
 			}
 		}
 	}
