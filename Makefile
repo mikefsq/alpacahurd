@@ -1,7 +1,9 @@
 # alpacahurd — build and install the herd. Run `make help` for the targets.
 #
 
-export GOWORK := off
+# Local go.work (git-ignored) selects sibling checkouts when present. GOWORK=off make
+# builds the versions recorded in go.mod.
+export GOWORK ?= auto
 
 BIN := alpacahurd
 
@@ -36,11 +38,11 @@ deb: ## Build Debian packages in dist/
 	build/build-deb
 
 deps: ## Download the dependency versions recorded in go.mod
-	go mod download
+	GOWORK=off go mod download
 
 tidy: ## Regenerate imports and tidy the recorded module dependencies
 	go run ./internal/gendrivers
-	go mod tidy
+	GOWORK=off go mod tidy
 
 test: ## Run the Go test suite
 	go test ./...
